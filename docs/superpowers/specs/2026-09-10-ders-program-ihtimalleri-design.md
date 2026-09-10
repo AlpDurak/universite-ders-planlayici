@@ -59,7 +59,13 @@ Verified properties of the reference file:
 - Credit values observed: 1, 2, 3, 4, 5, 6, 8, 10.
 - Every base code has at least one `LEC` section; no course is lab-only.
 - Container is a normal ZIP using deflate and stored entries only.
-- Strings are **inline** (`<is><t>`); `sharedStrings.xml` is empty.
+- Elements carry an `x:` namespace prefix (`<x:row>`, `<x:c>`). Excel's own output
+  has no prefix, so the parser must accept both.
+- Text cells use **`t="str"` with the literal in `<v>`**, not inline strings.
+  `sharedStrings.xml` exists but is empty. All four encodings must be supported:
+  `str` (literal in `<v>`), `s` (index into shared strings), `inlineStr`
+  (`<is><t>`), and no `t` at all (numeric).
+- Empty cells appear **self-closing**: `<x:c r="F212" s="12" t="str" />`.
 
 ### Known dirty data
 
@@ -113,9 +119,30 @@ old for offline XLSX reading" message rather than failing silently.
 
 ### 5.2 Sheet parsing
 
-`DOMParser` over `xl/worksheets/sheet1.xml`. Cell text resolution supports both
-inline strings (`<is><t>`) and shared strings (`t="s"` → index into
-`sharedStrings.xml`), so a file re-saved by Excel still works.
+A small **regex-based scanner**, not `DOMParser`.
+
+`DOMParser` does not exist in Node, so a DOM-based parser could only be tested by
+adding jsdom — a dependency, which contradicts the zero-dependency goal. A regex
+scanner runs identically in the browser and under `node --test`, so the sheet
+parser is covered by the same tests that cover everything else.
+
+All element patterns must tolerate an optional namespace prefix (`<x:row>` and
+`<row>` alike).
+
+Cell text resolution covers all four encodings listed in §3: `str`, `s`,
+`inlineStr`, and untyped numeric — so both this file and an Excel re-save work.
+
+**The attribute capture must be non-greedy.** With a greedy `([^>]*)`, the `/` of
+a self-closing empty cell is absorbed into the attribute run, the `/>` branch
+never matches, and the cell instead consumes the *following* cell's content up to
+its `</c>`. In the reference file this silently deleted `COMP1111-L.3`'s meeting
+time. The required form is:
+
+```js
+/<(?:\w+:)?c\b([^>]*?)\s*(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g
+```
+
+This has a dedicated regression test (§13).
 
 ### 5.3 Column identification by content, not header
 
@@ -339,6 +366,10 @@ test runner. The reference XLSX is the fixture.
 
 Coverage:
 
+- **XLSX reading** — stored and deflated entries; `x:`-prefixed and unprefixed
+  elements; all four cell encodings (`str`, `s`, `inlineStr`, numeric); XML entity
+  unescaping; **self-closing empty cells do not swallow the next cell** (regression
+  test pinned to `COMP1111-L.3` = `Th2Th3` in the reference file).
 - **Slot parsing** — `Th` before `T`; `St` before `S`; hour 10–13 two-digit;
   truncated strings flagged, not silently accepted; trailing punctuation tolerated.
 - **Code parsing** — Turkish letters; trailing space; `GSKE-250.2.1`; `-L` / `-PS` kinds.

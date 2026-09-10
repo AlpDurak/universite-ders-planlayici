@@ -41,10 +41,16 @@
 
   // Spec §9.1: the drop zone is replaced by a compact summary, not removed —
   // removing it would make loading a second file impossible without a reload.
-  function renderFileSummary(file) {
+  function togglePreset(show) {
+    const button = $('preset');
+    if (button) button.classList.toggle('hidden', !show);
+  }
+
+  function renderFileSummary(name) {
+    togglePreset(false);
     $('drop').classList.add('loaded');
     $('dropinner').innerHTML =
-      '<strong>' + escapeHtml(file.name) + '</strong>' +
+      '<strong>' + escapeHtml(name) + '</strong>' +
       '<span class="sub">' + state.courses.length + ' ders · ' +
       state.warnings.length + ' uyarı</span>' +
       '<button id="rechoose" type="button">Başka dosya seç</button>';
@@ -65,9 +71,14 @@
   }
 
   async function loadFile(file) {
+    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+  }
+
+  // The single load path. The file picker and the built-in schedule button both
+  // arrive here, so neither can drift away from the other's behaviour.
+  async function loadBytes(bytes, name) {
     resetForNewFile();
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
       const { rows } = await XlsxReader.readWorkbook(bytes);
       const cols = CourseParser.detectColumns(rows);
       const built = CourseParser.buildCourses(rows, cols);
@@ -76,7 +87,7 @@
       state.akts = Boolean(cols.akts);
       state.prefs = Scoring.defaultPrefs();
       restore();
-      renderFileSummary(file);
+      renderFileSummary(name);
       $('app').classList.remove('hidden');
       renderWarnings();
       renderChips();
@@ -295,6 +306,22 @@
   function wire() {
     const drop = $('drop');
     drop.addEventListener('click', () => $('file').click());
+
+    // The bundled schedule, so the common case needs no file at all.
+    const preset = $('preset');
+    if (preset && typeof PresetSchedule !== 'undefined') {
+      preset.querySelector('span').textContent = PresetSchedule.label;
+      preset.addEventListener('click', () => {
+        try {
+          loadBytes(PresetSchedule.toBytes(), PresetSchedule.name);
+        } catch (err) {
+          showError('Hazır ders programı açılamadı: ' + (err.message || String(err)));
+        }
+      });
+    } else if (preset) {
+      // The generated module is missing; a dead button would be worse than none.
+      preset.classList.add('hidden');
+    }
     $('file').addEventListener('change', (e) => {
       const file = e.target.files[0];
       // Clear it so picking the SAME file twice still fires a change event.

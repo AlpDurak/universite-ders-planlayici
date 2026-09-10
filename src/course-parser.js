@@ -187,5 +187,79 @@
     };
   }
 
-  return { DAYS, MAX_HOUR, parseCode, parseSlots, parseCredit, detectColumns };
+  function slotsToMask(slots) {
+    const mask = new Uint16Array(DAYS.length);
+    for (const slot of slots) mask[slot.day] |= (1 << (slot.hour - 1));
+    return mask;
+  }
+
+  function parseQuota(raw) {
+    const match = QUOTA_RE.exec(String(raw == null ? '' : raw).trim());
+    if (!match) return null;
+    const parts = String(raw).split('/');
+    return { left: parseInt(parts[0], 10), total: parseInt(parts[1], 10) };
+  }
+
+  function buildCourses(rows, cols) {
+    const byBase = new Map();
+    const warnings = [];
+
+    for (const row of rows.slice(1)) {
+      const rawCode = row[cols.code];
+      const parsed = parseCode(rawCode);
+      if (!parsed) continue;
+
+      const title = (row[cols.title] || '').trim();
+      const slotInfo = parseSlots(row[cols.slots]);
+      const rawSlots = (row[cols.slots] || '').trim();
+
+      if (slotInfo.truncated && rawSlots !== '') {
+        warnings.push({
+          code: String(rawCode).trim(),
+          reason: 'Class hours could not be read in full ("' + rawSlots + '") — excluded from planning.',
+        });
+      }
+
+      const section = {
+        code: String(rawCode).trim(),
+        base: parsed.base,
+        kind: parsed.kind,
+        sectionNo: parsed.sectionNo,
+        title,
+        credit: parseCredit(title),
+        slots: slotInfo.slots,
+        mask: slotsToMask(slotInfo.slots),
+        hours: cols.hours ? Number(row[cols.hours] || 0) : slotInfo.slots.length,
+        akts: cols.akts ? Number(row[cols.akts] || 0) : null,
+        campus: cols.campus ? (row[cols.campus] || '') : '',
+        instructor: (cols.instructorParts || [])
+          .map((letter) => (row[letter] || '').trim()).filter(Boolean).join(' '),
+        quota: cols.quota ? parseQuota(row[cols.quota]) : null,
+        truncated: slotInfo.truncated && rawSlots !== '',
+        unscheduled: rawSlots === '',
+      };
+
+      if (!byBase.has(parsed.base)) {
+        byBase.set(parsed.base, {
+          base: parsed.base, title: '', credit: 0, akts: null,
+          groups: { LEC: [], LAB: [], PS: [] },
+        });
+      }
+      const course = byBase.get(parsed.base);
+      course.groups[parsed.kind].push(section);
+
+      // Title and credit come from the parent lecture row only, so a lab never
+      // contributes a second credit for the same course.
+      if (parsed.kind === 'LEC') {
+        if (section.credit > 0 || !course.title) course.title = title.replace(CREDIT_RE, '').trim();
+        if (section.credit > 0) course.credit = section.credit;
+        if (section.akts) course.akts = section.akts;
+      }
+    }
+
+    const courses = [...byBase.values()].sort((a, b) => a.base.localeCompare(b.base, 'tr'));
+    return { courses, warnings };
+  }
+
+  return { DAYS, MAX_HOUR, parseCode, parseSlots, parseCredit, detectColumns, slotsToMask, buildCourses };
 });

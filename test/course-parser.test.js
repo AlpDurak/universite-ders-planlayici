@@ -122,3 +122,48 @@ test('detectColumns names the title role when no column looks like a title', () 
   ];
   assert.throws(() => P.detectColumns(rows), /title/i);
 });
+
+test('slotsToMask sets one bit per day/hour', () => {
+  const mask = P.slotsToMask([{ day: 1, hour: 1 }, { day: 1, hour: 3 }, { day: 3, hour: 2 }]);
+  assert.strictEqual(mask[1], 0b101);
+  assert.strictEqual(mask[3], 0b010);
+  assert.strictEqual(mask[0], 0);
+});
+
+test('buildCourses groups sections by base and kind', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const { courses } = P.buildCourses(rows, P.detectColumns(rows));
+  const comp = courses.find((c) => c.base === 'COMP1111');
+  assert.strictEqual(comp.groups.LEC.length, 2);
+  assert.strictEqual(comp.groups.LAB.length, 3);
+  assert.strictEqual(comp.groups.PS.length, 0);
+});
+
+test('credit comes from the parent row and is counted once per course', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const { courses } = P.buildCourses(rows, P.detectColumns(rows));
+  const comp = courses.find((c) => c.base === 'COMP1111');
+  assert.strictEqual(comp.credit, 4);                       // from 'Programlama Temelleri (4)'
+  assert.strictEqual(comp.groups.LAB[0].credit, 0);         // lab contributes nothing
+  const staj = courses.find((c) => c.base === 'AHİZ2939');
+  assert.strictEqual(staj.credit, 0);                       // internship, no (n)
+});
+
+test('buildCourses reports truncated sections as warnings', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const { warnings } = P.buildCourses(rows, P.detectColumns(rows));
+  assert.ok(warnings.some((w) => w.code.startsWith('PREP1111')),
+    'expected PREP1111 to be flagged as truncated');
+});
+
+test('buildCourses parses the whole reference file without throwing', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const { courses } = P.buildCourses(rows, P.detectColumns(rows));
+  // 799 base courses: every one of the 1269 rows parses under the Task 2 regex,
+  // including the odd GSKE-250.2.1 and 'HUSS1003 .1' forms.
+  assert.strictEqual(courses.length, 799);
+  assert.ok(courses.every((c) => c.groups.LEC.length > 0), 'every course needs a lecture group');
+  const math = courses.find((c) => c.base === 'MATH1001');
+  assert.strictEqual(math.groups.LEC.length, 3);
+  assert.strictEqual(math.groups.PS.length, 3);
+});

@@ -151,9 +151,55 @@ test('credit comes from the parent row and is counted once per course', async ()
 
 test('buildCourses reports truncated sections as warnings', async () => {
   const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
-  const { warnings } = P.buildCourses(rows, P.detectColumns(rows));
+  const cols = P.detectColumns(rows);
+  const { courses, warnings } = P.buildCourses(rows, cols);
   assert.ok(warnings.some((w) => w.code.startsWith('PREP1111')),
     'expected PREP1111 to be flagged as truncated');
+
+  // The reason must actually describe the problem, not just carry a code prefix.
+  for (const w of warnings) {
+    assert.strictEqual(typeof w.reason, 'string');
+    assert.ok(w.reason.length > 0, `warning ${w.code} has an empty reason`);
+    assert.ok(w.reason.includes('could not be read in full'),
+      `warning ${w.code} reason should mention the unreadable meeting times, got: "${w.reason}"`);
+  }
+
+  // A row whose meeting-times cell is merely empty is 'unscheduled', not 'truncated',
+  // and must never show up as a warning. Verify by tracing every warning back to the
+  // section it was raised for and checking it was not simply unscheduled.
+  const allSections = courses.flatMap((c) => [...c.groups.LEC, ...c.groups.LAB, ...c.groups.PS]);
+  for (const w of warnings) {
+    const section = allSections.find((s) => s.code === w.code);
+    assert.ok(section, `warning code ${w.code} should correspond to a built section`);
+    assert.strictEqual(section.unscheduled, false,
+      `section ${w.code} was warned about but is marked unscheduled`);
+  }
+
+  // Pinning the count catches a regression where unscheduled rows start warning too.
+  assert.strictEqual(warnings.length, 6);
+});
+
+test('buildCourses counts credit once even when the credit-bearing LEC row arrives second', () => {
+  const rows = [
+    { Z: 'Ders Kodu', Y: 'Baslik', X: 'Saat' },              // header, skipped
+    { Z: 'ABCD1234.1', Y: 'Test Dersi', X: 'T2T3T4' },        // LEC, no (n) — arrives first
+    { Z: 'ABCD1234.2', Y: 'Test Dersi (3)', X: 'W1W2W3' },    // LEC, has (3) — arrives second
+    { Z: 'ABCD1234-L.1', Y: 'Test Dersi', X: 'M1M2' },        // LAB, no credit of its own
+  ];
+  const cols = P.detectColumns(rows);
+  const { courses } = P.buildCourses(rows, cols);
+  const course = courses.find((c) => c.base === 'ABCD1234');
+  assert.ok(course, 'expected ABCD1234 to be built from the synthetic rows');
+
+  // Credit must come from whichever LEC row carries the '(n)' suffix, regardless of
+  // row order — not from the first LEC row encountered, and not reset to 0 by it.
+  assert.strictEqual(course.credit, 3);
+  assert.strictEqual(course.title, 'Test Dersi');   // trailing '(3)' stripped
+
+  // The lab section carries no credit of its own and must not disturb the course credit.
+  assert.strictEqual(course.groups.LAB.length, 1);
+  assert.strictEqual(course.groups.LAB[0].credit, 0);
+  assert.strictEqual(course.credit, 3);
 });
 
 test('buildCourses parses the whole reference file without throwing', async () => {

@@ -9,14 +9,22 @@
 })(typeof self !== 'undefined' ? self : this, function (CourseParser) {
   const DAYS = CourseParser.DAYS;
 
-  const DEFAULT_PREFS = {
-    freeDays: ['F'],
+  const DEFAULT_PREFS = Object.freeze({
+    freeDays: Object.freeze(['F']),
     freeDayWeight: 200,
     compactness: 0.5,
     maxGap: null,
     avoidSingleCourseDays: true,
     singleCourseDayPenalty: 100,
-  };
+  });
+
+  // Always clone from this rather than DEFAULT_PREFS directly: DEFAULT_PREFS is
+  // frozen (including its freeDays array), so any caller that mutates a naive
+  // Object.assign({}, DEFAULT_PREFS) copy would be mutating the SAME freeDays
+  // array as the frozen defaults, corrupting every future read of them.
+  function defaultPrefs() {
+    return Object.assign({}, DEFAULT_PREFS, { freeDays: DEFAULT_PREFS.freeDays.slice() });
+  }
 
   const GAP_UNIT = 20;   // points per gap hour at compactness 1
 
@@ -56,7 +64,9 @@
       const index = DAYS.indexOf(dayCode);
       if (index >= 0 && perDayHours[index].length === 0) {
         score += settings.freeDayWeight;
-        breakdown.push({ label: dayCode + ' kept free', points: settings.freeDayWeight });
+        breakdown.push({
+          code: 'FREE_DAY', label: dayCode + ' günü boş', points: settings.freeDayWeight,
+        });
       }
     }
 
@@ -73,7 +83,7 @@
     if (totalGapHours > 0 && settings.compactness !== 0) {
       const points = Math.round(-settings.compactness * GAP_UNIT * totalGapHours);
       score += points;
-      breakdown.push({ label: totalGapHours + ' gap hour(s)', points });
+      breakdown.push({ code: 'GAP_HOURS', label: totalGapHours + ' saat boşluk', points });
     }
 
     if (settings.avoidSingleCourseDays) {
@@ -84,12 +94,14 @@
       if (lonelyDays > 0) {
         const points = -lonelyDays * settings.singleCourseDayPenalty;
         score += points;
-        breakdown.push({ label: lonelyDays + ' day(s) with a single course', points });
+        breakdown.push({
+          code: 'SINGLE_COURSE_DAYS', label: lonelyDays + ' gün tek derslik', points,
+        });
       }
     }
 
     return { score, breakdown, rejected: false };
   }
 
-  return { DEFAULT_PREFS, dayHours, scoreSchedule };
+  return { DEFAULT_PREFS, defaultPrefs, dayHours, scoreSchedule };
 });

@@ -3,6 +3,13 @@
   const $ = (id) => document.getElementById(id);
   const state = { courses: [], warnings: [], selected: new Set(), prefs: null, akts: false };
 
+  const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  // Spreadsheet-derived text (course codes, titles, instructor names, etc.) is
+  // attacker-controlled: escape it before it is interpolated into innerHTML.
+  function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch]);
+  }
+
   function showError(message) {
     $('error').textContent = message;
     $('error').classList.remove('hidden');
@@ -24,7 +31,7 @@
       state.courses = built.courses;
       state.warnings = built.warnings;
       state.akts = Boolean(cols.akts);
-      state.prefs = Object.assign({}, Scoring.DEFAULT_PREFS);
+      state.prefs = Scoring.defaultPrefs();
       restore();
       $('drop').classList.add('hidden');
       $('app').classList.remove('hidden');
@@ -47,7 +54,8 @@
     if (state.warnings.length === 0) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const list = state.warnings.slice(0, 12)
-      .map((w) => '<li><code>' + w.code + '</code> — ' + w.reason + '</li>').join('');
+      .map((w) => '<li><code>' + escapeHtml(w.code) + '</code> — ' +
+        escapeHtml(w.reason) + '</li>').join('');
     const more = state.warnings.length > 12
       ? '<li>…ve ' + (state.warnings.length - 12) + ' tane daha</li>' : '';
     box.innerHTML = '<strong>' + state.warnings.length +
@@ -56,7 +64,7 @@
 
   function chipLabel(course) {
     const credit = course.credit > 0 ? course.credit : '—';
-    return course.base + '<span class="cr"> · ' + credit + '</span>';
+    return escapeHtml(course.base) + '<span class="cr"> · ' + escapeHtml(credit) + '</span>';
   }
 
   function renderChips() {
@@ -103,11 +111,12 @@
   function tooltipFor(course) {
     const sections = course.groups.LEC.concat(course.groups.LAB, course.groups.PS);
     const first = sections[0] || {};
-    const times = sections.map((s) => s.code + ': ' +
+    const times = sections.map((s) => escapeHtml(s.code) + ': ' +
       s.slots.map((sl) => CourseParser.DAYS[sl.day] + sl.hour).join(' ')).slice(0, 6).join('\n');
     const quota = first.quota ? first.quota.left + ' / ' + first.quota.total + ' kontenjan' : '';
-    return '<b>' + (course.title || course.base) + '</b>' +
-      (first.instructor ? first.instructor + ' · ' : '') + (first.campus || '') +
+    return '<b>' + escapeHtml(course.title || course.base) + '</b>' +
+      (first.instructor ? escapeHtml(first.instructor) + ' · ' : '') +
+      escapeHtml(first.campus || '') +
       (quota ? ' · ' + quota : '') +
       '<br>' + sections.length + ' bölüm<br><pre style="margin:4px 0 0;font:inherit">' +
       times + '</pre>';
@@ -168,7 +177,7 @@
       state.selected = new Set(saved.filter(
         (base) => state.courses.some((c) => c.base === base)));
       const prefs = JSON.parse(localStorage.getItem('dpi.prefs') || 'null');
-      if (prefs) state.prefs = Object.assign({}, Scoring.DEFAULT_PREFS, prefs);
+      if (prefs) state.prefs = Object.assign(Scoring.defaultPrefs(), prefs);
     } catch (err) { state.selected = new Set(); }
   }
 
@@ -238,22 +247,47 @@
       .map((code, index) => ({ code, index }))
       .filter((d) => d.index < 5 || used.has(d.index));
 
+    // day:hour -> list of sections occupying that slot. More than one section
+    // means a Madde 18/2 clash — both must stay visible, not last-write-wins.
     const grid = new Map();
     for (const section of entry.sections) {
-      for (const slot of section.slots) grid.set(slot.day + ':' + slot.hour, section);
+      for (const slot of section.slots) {
+        const key = slot.day + ':' + slot.hour;
+        const list = grid.get(key);
+        if (list) list.push(section); else grid.set(key, [section]);
+      }
     }
+    // Two consecutive hours in the same column merge into one rowspan cell
+    // only when they hold the exact same section(s) — not merely "some section".
+    const signature = (list) => (list ? list.map((s) => s.code).sort().join('+') : '');
+
+    const skip = {};
+    for (const day of days) skip[day.index] = 0;
 
     let html = '<div class="scroll"><table class="cal"><thead><tr><th></th>';
     for (const day of days) html += '<th>' + day.code + '</th>';
     html += '</tr></thead><tbody>';
+
     for (let hour = 1; hour <= CourseParser.MAX_HOUR; hour++) {
       html += '<tr><th>' + hour + '</th>';
       for (const day of days) {
-        const section = grid.get(day.index + ':' + hour);
-        html += section
-          ? '<td class="busy" style="background:' + colourFor(section.base) + '">' +
-            section.code + '</td>'
-          : '<td></td>';
+        if (skip[day.index] > 0) { skip[day.index]--; continue; }
+
+        const list = grid.get(day.index + ':' + hour);
+        if (!list) { html += '<td></td>'; continue; }
+
+        const sig = signature(list);
+        let span = 1;
+        while (hour + span <= CourseParser.MAX_HOUR &&
+               signature(grid.get(day.index + ':' + (hour + span))) === sig) span++;
+        skip[day.index] = span - 1;
+
+        const codes = list.map((s) => escapeHtml(s.code)).join(' / ');
+        html += list.length > 1
+          ? '<td class="busy clash" rowspan="' + span + '" title="' +
+            escapeHtml('Çakışma: ' + list.map((s) => s.code).join(' / ')) + '">' + codes + '</td>'
+          : '<td class="busy" rowspan="' + span + '" style="background:' +
+            colourFor(list[0].base) + '">' + codes + '</td>';
       }
       html += '</tr>';
     }
@@ -264,14 +298,18 @@
     const box = $('results');
     box.innerHTML = '';
 
+    // Show the truncation notice regardless of whether any results were found:
+    // an empty result from a cut-off search means something different (search
+    // was incomplete) than an empty result from an exhaustive one.
+    if (output.truncated) {
+      box.innerHTML += '<div class="card warn">Arama sınıra takıldı — sonuçlar eksik olabilir. ' +
+        'Daha az ders seçersen tam sonuç alırsın.</div>';
+    }
+
     if (output.results.length === 0) {
-      box.innerHTML = '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
+      box.innerHTML += '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
         'Madde 18/2 seçeneğini açmayı ya da bir dersi çıkarmayı deneyebilirsin.</div>';
       return;
-    }
-    if (output.truncated) {
-      box.innerHTML = '<div class="card warn">Arama sınıra takıldı — sonuçlar eksik olabilir. ' +
-        'Daha az ders seçersen tam sonuç alırsın.</div>';
     }
 
     output.results.forEach((entry, index) => {
@@ -286,7 +324,7 @@
         : '';
       const alternates = entry.alternates.length
         ? '<p class="sub">Aynı saatlerde alternatif şubeler: ' +
-          entry.alternates.map((codes) => codes.join(', ')).join(' | ') + '</p>'
+          entry.alternates.map((codes) => codes.map(escapeHtml).join(', ')).join(' | ') + '</p>'
         : '';
       card.innerHTML = '<header><h3>#' + (index + 1) + '</h3>' +
         '<span class="sub">puan ' + entry.score + '/100</span>' + badge + '</header>' +

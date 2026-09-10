@@ -72,12 +72,14 @@
            background: var(--warn-soft); color: var(--warn); border: 1px solid #fed7aa; }
   .cal { width: 100%; border-collapse: collapse; table-layout: fixed; }
   .cal th, .cal td { border: 1px solid var(--line); padding: 3px; height: 26px;
-                     font-size: 12px; text-align: center; }
+                     font-size: 12px; text-align: center; vertical-align: middle; }
   .cal th:first-child, .cal td:first-child { width: 44px; color: var(--muted); }
   .cal td.busy { font-weight: 600; }
+  .cal td.clash { background: repeating-linear-gradient(45deg, #fee2e2, #fee2e2 6px,
+                  #fecaca 6px, #fecaca 12px); color: #b91c1c; border-color: #f87171; }
   .scroll { overflow-x: auto; }
   @media print {
-    #drop, .bar, .prefs, #go, #search, .chips, #warnings { display: none !important; }
+    #drop, .bar, .prefs-card, #search, .chips, #warnings { display: none !important; }
     .sched { border-color: #999; }
   }
 </style>
@@ -119,7 +121,7 @@
       <div id="chips" class="chips"></div>
     </div>
 
-    <div class="card">
+    <div class="card prefs-card">
       <strong>Tercihler</strong>
       <div class="prefs">
         <div>

@@ -65,10 +65,12 @@ mkdir -p test/fixtures src
 cp "D:/Downloads/2026_Guz_Haftalik_Ders_Programi.xlsx" test/fixtures/
 ```
 
-In `package.json`, add to `"scripts"`:
+In `package.json`, add to `"scripts"` (no path argument — on Windows Node treats
+`node --test test/` as a module path and throws; bare `node --test` uses Node's own
+`test/**/*.js` discovery):
 
 ```json
-"test": "node --test test/"
+"test": "node --test"
 ```
 
 - [ ] **Step 2: Write the failing test**
@@ -562,28 +564,42 @@ In `src/course-parser.js`, add before the `return` statement:
       (v) => QUOTA_RE.test(v), 0.5);
     if (quota) used.push(quota);
 
-    // Contact hours: the integer column whose values track the slot count.
-    // Checking the correlation (rather than just "is an integer") is what keeps
-    // this from claiming an AKTS column that happens to appear first.
-    const tracksSlotCount = (letter) => {
+    // Contact hours vs AKTS: both are integer columns, so "is an integer" cannot
+    // tell them apart. Contact hours is the one that tracks the slot count.
+    //
+    // Do NOT use a fixed agreement threshold. In the reference file column I
+    // agrees with the slot count on only 89% of rows — 101 rows legitimately
+    // disagree because the hours figure includes untimetabled practicum time
+    // (AHİZ1111.1 reports 4 hours for 3 scheduled slots). Any threshold above
+    // 0.89 misidentifies the real hours column; any threshold low enough to
+    // admit it is an arbitrary number that a different file would break.
+    // Ranking sidesteps the guess: the best-tracking integer column is hours,
+    // and a second integer column alongside it is AKTS.
+    const slotAgreementRate = (letter) => {
       const comparable = body.filter((r) => r[letter] && r[slots]);
-      if (comparable.length === 0) return false;
+      if (comparable.length === 0) return 0;
       const agreeing = comparable.filter((r) => {
         const parsed = parseSlots(r[slots]);
         return parsed.truncated || Number(r[letter]) === parsed.slots.length;
       });
-      return agreeing.length / comparable.length > 0.9;
+      return agreeing.length / comparable.length;
     };
 
     const integerColumns = letters
       .filter((l) => !used.includes(l))
-      .filter((l) => matchRate(body, l, (v) => INT_RE.test(v)) > 0.8);
+      .filter((l) => matchRate(body, l, (v) => INT_RE.test(v)) > 0.8)
+      .map((l) => ({ letter: l, rate: slotAgreementRate(l) }))
+      .sort((a, b) => b.rate - a.rate);
 
-    const hours = integerColumns.find(tracksSlotCount) || null;
+    const hours = integerColumns.length > 0 && integerColumns[0].rate > 0.5
+      ? integerColumns[0].letter
+      : null;
     if (hours) used.push(hours);
 
-    // Any other integer column is AKTS: an integer that does NOT track slot count.
-    const akts = integerColumns.find((l) => l !== hours) || null;
+    // AKTS is only meaningful as a SECOND integer column beside a real hours
+    // column. Without that anchor, a lone unrelated integer column would be
+    // mislabelled AKTS and silently drive the load gauge.
+    const akts = hours && integerColumns.length > 1 ? integerColumns[1].letter : null;
     if (akts) used.push(akts);
 
     // Campus is a text column with only a handful of distinct values, so it is

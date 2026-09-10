@@ -50,10 +50,11 @@
 
   function chipLabel(course) {
     const credit = course.credit > 0 ? course.credit : '—';
-    return course.base + '<span class="cr">' + credit + '</span>';
+    return course.base + '<span class="cr"> · ' + credit + '</span>';
   }
 
   function renderChips() {
+    $('tip').style.display = 'none';
     const query = fold($('search').value.trim());
     const matches = state.courses.filter((course) => {
       if (!query) return true;
@@ -85,6 +86,11 @@
     }
     if (matches.length === 0) {
       box.innerHTML = '<p class="sub">Eşleşen ders yok.</p>';
+    } else if (matches.length > 400) {
+      const note = document.createElement('p');
+      note.className = 'sub';
+      note.textContent = matches.length + ' dersten ilk 400 tanesi gösteriliyor — aramayı daraltın.';
+      box.appendChild(note);
     }
   }
 
@@ -111,8 +117,12 @@
       tip.innerHTML = tooltipFor(course);
       tip.style.display = 'block';
       const box = chip.getBoundingClientRect();
-      tip.style.left = Math.min(box.left, window.innerWidth - 340) + 'px';
-      tip.style.top = (box.bottom + 8) + 'px';
+      const tipBox = tip.getBoundingClientRect();
+      tip.style.left = Math.max(0, Math.min(box.left, window.innerWidth - 340)) + 'px';
+      const fitsBelow = box.bottom + 8 + tipBox.height <= window.innerHeight;
+      tip.style.top = fitsBelow
+        ? (box.bottom + 8) + 'px'
+        : Math.max(0, box.top - 8 - tipBox.height) + 'px';
     });
     $('chips').addEventListener('mouseout', (event) => {
       if (!event.target.closest('.chip')) return;
@@ -166,6 +176,7 @@
       e.preventDefault();
       drop.classList.remove('over');
       if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+      else showError('Bir dosya bırakmalısınız (ör. .xlsx) — sürüklenen içerik dosya değil.');
     });
     $('search').addEventListener('input', renderChips);
     $('gno').addEventListener('change', renderSummary);

@@ -96,7 +96,7 @@ test('detectColumns survives shuffled columns', () => {
 
 test('detectColumns names the role it could not find', () => {
   const rows = [{ A: 'h' }, { A: 'no codes here' }, { A: 'still none' }];
-  assert.throws(() => P.detectColumns(rows), /code/i);
+  assert.throws(() => P.detectColumns(rows), (err) => err.code === 'NO_CODE_COLUMN');
 });
 
 test('detectColumns names the class-hours role when no column holds slots', () => {
@@ -108,7 +108,7 @@ test('detectColumns names the class-hours role when no column holds slots', () =
     { A: 'COMP1111.2', B: 'more plain text here' },
     { A: 'MATH1111.1', B: 'random words without digits' },
   ];
-  assert.throws(() => P.detectColumns(rows), /slots|hours|saat/i);
+  assert.throws(() => P.detectColumns(rows), (err) => err.code === 'NO_SLOTS_COLUMN');
 });
 
 test('detectColumns names the title role when no column looks like a title', () => {
@@ -120,7 +120,7 @@ test('detectColumns names the title role when no column looks like a title', () 
     { A: 'COMP1111.2', B: 'T1T2T3' },
     { A: 'MATH1111.1', B: 'M1M2M3' },
   ];
-  assert.throws(() => P.detectColumns(rows), /title/i);
+  assert.throws(() => P.detectColumns(rows), (err) => err.code === 'NO_TITLE_COLUMN');
 });
 
 test('slotsToMask sets one bit per day/hour', () => {
@@ -156,12 +156,13 @@ test('buildCourses reports truncated sections as warnings', async () => {
   assert.ok(warnings.some((w) => w.code.startsWith('PREP1111')),
     'expected PREP1111 to be flagged as truncated');
 
-  // The reason must actually describe the problem, not just carry a code prefix.
+  // The reason must actually describe the problem (not just carry a code prefix), and
+  // every warning must be tagged with the stable, language-independent warning code.
   for (const w of warnings) {
+    assert.strictEqual(w.warningCode, 'TRUNCATED_SLOTS',
+      `warning ${w.code} should be tagged TRUNCATED_SLOTS, got: "${w.warningCode}"`);
     assert.strictEqual(typeof w.reason, 'string');
     assert.ok(w.reason.length > 0, `warning ${w.code} has an empty reason`);
-    assert.ok(w.reason.includes('could not be read in full'),
-      `warning ${w.code} reason should mention the unreadable meeting times, got: "${w.reason}"`);
   }
 
   // A row whose meeting-times cell is merely empty is 'unscheduled', not 'truncated',

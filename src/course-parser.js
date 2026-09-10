@@ -85,15 +85,19 @@
 
     const code = bestColumn(body, letters, (v) => parseCode(v) !== null, 0.5);
     if (!code) {
-      throw new Error(
-        'Could not find the course-code column. Expected values like "COMP1111.1" or "COMP1111-L.1".');
+      const err = new Error(
+        'Ders kodu sütunu bulunamadı. "COMP1111.1" veya "COMP1111-L.1" gibi değerler bekleniyordu.');
+      err.code = 'NO_CODE_COLUMN';
+      throw err;
     }
 
     const slots = bestColumn(body, letters.filter((l) => l !== code),
       (v) => !parseSlots(v).truncated && parseSlots(v).slots.length > 0, 0.3);
     if (!slots) {
-      throw new Error(
-        'Could not find the class-hours column. Expected values like "T2T3T4" or "Th2Th3".');
+      const err = new Error(
+        'Ders saati sütunu bulunamadı. "T2T3T4" veya "Th2Th3" gibi değerler bekleniyordu.');
+      err.code = 'NO_SLOTS_COLUMN';
+      throw err;
     }
 
     const used = [code, slots];
@@ -102,7 +106,9 @@
     const title = bestColumn(body, rest, (v) => CREDIT_RE.test(v), 0.1)
       || bestColumn(body, rest, (v) => /[A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç]{4,}/.test(v), 0.5);
     if (!title) {
-      throw new Error('Could not find the course-title column.');
+      const err = new Error('Ders adı sütunu bulunamadı.');
+      err.code = 'NO_TITLE_COLUMN';
+      throw err;
     }
     used.push(title);
 
@@ -216,7 +222,8 @@
       if (slotInfo.truncated && rawSlots !== '') {
         warnings.push({
           code: String(rawCode).trim(),
-          reason: 'Class hours could not be read in full ("' + rawSlots + '") — excluded from planning.',
+          warningCode: 'TRUNCATED_SLOTS',
+          reason: 'Ders saatleri tam okunamadı ("' + rawSlots + '") — planlamaya dahil edilmedi.',
         });
       }
 

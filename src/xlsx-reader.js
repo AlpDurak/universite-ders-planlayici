@@ -9,9 +9,12 @@
 
   async function inflateRaw(bytes) {
     if (typeof DecompressionStream === 'undefined') {
-      throw new Error(
-        'This browser cannot read .xlsx files offline (DecompressionStream is unavailable). ' +
-        'Please use a current version of Chrome, Edge, Firefox or Safari.');
+      const err = new Error(
+        'Bu tarayıcı .xlsx dosyalarını çevrimdışı okuyamıyor (DecompressionStream ' +
+        'kullanılamıyor). Lütfen Chrome, Edge, Firefox veya Safari\'nin güncel bir ' +
+        'sürümünü kullanın.');
+      err.code = 'DECOMPRESSION_UNAVAILABLE';
+      throw err;
     }
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -22,13 +25,21 @@
     for (let i = bytes.length - 22; i >= 0; i--) {
       if (u32(bytes, i) === 0x06054b50) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error('This does not look like an .xlsx file (no ZIP directory found).');
+    if (eocd < 0) {
+      const err = new Error('Bu dosya bir .xlsx dosyasına benzemiyor (ZIP dizini bulunamadı).');
+      err.code = 'NOT_A_ZIP';
+      throw err;
+    }
 
     const count = u16(bytes, eocd + 10);
     let off = u32(bytes, eocd + 16);
     const out = {};
     for (let k = 0; k < count; k++) {
-      if (u32(bytes, off) !== 0x02014b50) throw new Error('This .xlsx file appears to be corrupt.');
+      if (u32(bytes, off) !== 0x02014b50) {
+        const err = new Error('Bu .xlsx dosyası bozuk görünüyor.');
+        err.code = 'CORRUPT_ZIP';
+        throw err;
+      }
       const method = u16(bytes, off + 10);
       const csize = u32(bytes, off + 20);
       const nlen = u16(bytes, off + 28);
@@ -42,7 +53,12 @@
       const raw = bytes.subarray(start, start + csize);
       if (method === 0) out[name] = raw;
       else if (method === 8) out[name] = await inflateRaw(raw);
-      else throw new Error('Unsupported compression in .xlsx (method ' + method + ').');
+      else {
+        const err = new Error(
+          '.xlsx dosyasında desteklenmeyen bir sıkıştırma yöntemi var (yöntem ' + method + ').');
+        err.code = 'UNSUPPORTED_COMPRESSION';
+        throw err;
+      }
       off += 46 + nlen + elen + clen;
     }
     return out;
@@ -108,7 +124,10 @@
       .filter((n) => /^xl\/worksheets\/.+\.xml$/.test(n))
       .sort()[0];
     if (!sheetPath) {
-      throw new Error('No worksheet found in this file (looked for xl/worksheets/*.xml).');
+      const err = new Error(
+        'Bu dosyada çalışma sayfası bulunamadı (xl/worksheets/*.xml aranmıştı).');
+      err.code = 'NO_WORKSHEET';
+      throw err;
     }
     const shared = parseSharedStrings(decode('xl/sharedStrings.xml'));
     return { rows: parseSheetXml(decode(sheetPath), shared), sheetPath };

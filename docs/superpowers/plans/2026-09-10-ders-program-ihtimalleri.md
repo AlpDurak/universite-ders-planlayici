@@ -562,19 +562,28 @@ In `src/course-parser.js`, add before the `return` statement:
       (v) => QUOTA_RE.test(v), 0.5);
     if (quota) used.push(quota);
 
-    // Hours: an integer column whose values track the slot count.
-    const hours = bestColumn(body, letters.filter((l) => !used.includes(l)),
-      (v) => INT_RE.test(v), 0.8);
+    // Contact hours: the integer column whose values track the slot count.
+    // Checking the correlation (rather than just "is an integer") is what keeps
+    // this from claiming an AKTS column that happens to appear first.
+    const tracksSlotCount = (letter) => {
+      const comparable = body.filter((r) => r[letter] && r[slots]);
+      if (comparable.length === 0) return false;
+      const agreeing = comparable.filter((r) => {
+        const parsed = parseSlots(r[slots]);
+        return parsed.truncated || Number(r[letter]) === parsed.slots.length;
+      });
+      return agreeing.length / comparable.length > 0.9;
+    };
+
+    const integerColumns = letters
+      .filter((l) => !used.includes(l))
+      .filter((l) => matchRate(body, l, (v) => INT_RE.test(v)) > 0.8);
+
+    const hours = integerColumns.find(tracksSlotCount) || null;
     if (hours) used.push(hours);
 
-    const hoursAgrees = hours && matchRate(body, hours, (v) => INT_RE.test(v)) > 0
-      && body.filter((r) => r[hours] && r[slots])
-        .every((r) => Number(r[hours]) === parseSlots(r[slots]).slots.length
-          || parseSlots(r[slots]).truncated);
-
-    // A second integer column that is NOT the contact-hours column is AKTS.
-    const akts = bestColumn(body, letters.filter((l) => !used.includes(l)),
-      (v) => INT_RE.test(v), 0.8);
+    // Any other integer column is AKTS: an integer that does NOT track slot count.
+    const akts = integerColumns.find((l) => l !== hours) || null;
     if (akts) used.push(akts);
 
     // Campus is a text column with only a handful of distinct values, so it is
@@ -594,8 +603,8 @@ In `src/course-parser.js`, add before the `return` statement:
       (v) => /^[A-ZÀ-ÿĞİÖŞÜÇ][A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç .'-]*$/.test(v), 0.6);
 
     return {
-      code, title, slots, quota: quota || null, hours: hoursAgrees ? hours : (hours || null),
-      campus: campus || null, instructor: instructor || null, akts: akts || null,
+      code, title, slots, quota: quota || null, hours,
+      campus: campus || null, instructor: instructor || null, akts,
     };
   }
 ```
@@ -671,8 +680,13 @@ test('buildCourses reports truncated sections as warnings', async () => {
 test('buildCourses parses the whole reference file without throwing', async () => {
   const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
   const { courses } = P.buildCourses(rows, P.detectColumns(rows));
-  assert.strictEqual(courses.length, 797);
+  // 799 base courses: every one of the 1269 rows parses under the Task 2 regex,
+  // including the odd GSKE-250.2.1 and 'HUSS1003 .1' forms.
+  assert.strictEqual(courses.length, 799);
   assert.ok(courses.every((c) => c.groups.LEC.length > 0), 'every course needs a lecture group');
+  const math = courses.find((c) => c.base === 'MATH1001');
+  assert.strictEqual(math.groups.LEC.length, 3);
+  assert.strictEqual(math.groups.PS.length, 3);
 });
 ```
 
@@ -1108,10 +1122,22 @@ test('the node cap stops the search and reports truncation', () => {
   assert.ok(out.explored <= 600);
 });
 
-test('truncated and unscheduled sections are excluded from the search', () => {
-  const bad = sec('A.1', 'A', 'LEC', []);
+// The truncated section carries real-looking slots, so only the `truncated`
+// flag can be what excludes it — an empty slot list would pass this test for
+// the wrong reason.
+test('a truncated section is excluded even when it has slots', () => {
+  const bad = sec('A.1', 'A', 'LEC', [[0, 1]]);
   bad.truncated = true;
-  const good = sec('A.2', 'A', 'LEC', [[0, 1]]);
+  const good = sec('A.2', 'A', 'LEC', [[0, 2]]);
+  const { results } = Solver.solve([course('A', { LEC: [bad, good] })], prefs(), {});
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].sections[0].code, 'A.2');
+});
+
+test('an unscheduled section is excluded from the search', () => {
+  const bad = sec('A.1', 'A', 'LEC', [[0, 1]]);
+  bad.unscheduled = true;
+  const good = sec('A.2', 'A', 'LEC', [[0, 2]]);
   const { results } = Solver.solve([course('A', { LEC: [bad, good] })], prefs(), {});
   assert.strictEqual(results.length, 1);
   assert.strictEqual(results[0].sections[0].code, 'A.2');
@@ -1224,7 +1250,7 @@ Create `src/solver.js`:
       }
     }
 
-    function unplace(section, index, hits, savedMask, savedOwner, savedPairs) {
+    function restore(savedMask, savedOwner, savedPairs) {
       occupancy.set(savedMask);
       owner.set(savedOwner);
       pairHours.clear();
@@ -1278,7 +1304,7 @@ Create `src/solver.js`:
         chosen.push(section);
         search(depth + 1);
         chosen.pop();
-        unplace(section, depth, hits, savedMask, savedOwner, savedPairs);
+        restore(savedMask, savedOwner, savedPairs);
 
         if (truncated) return;
       }
@@ -1903,7 +1929,9 @@ And in `loadFile`, after `renderSummary();`, add:
 
 Open `index.html`, load the XLSX, then confirm:
 
-1. Select `COMP1111`, `COMP1113`, `MATH1111` and press the calculate button.
+1. Select `COMP1111`, `COMP1113` and `MATH1001` and press the calculate button.
+   (`MATH1001` has three lectures and three PS sections, two of which both meet at
+   `F2` — so it exercises PS grouping and the dedup path at once.)
 2. Up to ten calendar cards appear, ranked, each with a score and a plain-language breakdown.
 3. No card shows two courses in the same cell.
 4. Toggling `F` as a free day and recalculating moves Friday-free schedules to the top.

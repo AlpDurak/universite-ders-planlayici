@@ -35,7 +35,8 @@ PDF-based path and are not part of this app.
 
 ## 3. Source data
 
-Sheet `Lectures`, 1269 data rows, 797 base courses. Header labels are unreliable
+Sheet `Lectures`, 1269 data rows, 799 base courses (every row's code parses
+under §5.4). Header labels are unreliable
 and are **not** trusted (see §5).
 
 | Col | Header (as written) | Actual content | Example |
@@ -78,7 +79,9 @@ Verified properties of the reference file:
 | Trailing punctuation in slots | `M11M12Th11Th12.` | tolerated; only residue after slot matching triggers a warning |
 | Dirty faculty values | `F2 Yabancı Diller Okulu` | carried through verbatim; display only |
 
-7 rows in the reference file have truncated slot strings.
+6 rows in the reference file have truncated slot strings (the five `PREP1111`
+sections and `PREP1373.1`). `MATH1000.1`'s `M11M12Th11Th12.` is *not* among
+them: its trailing dot is punctuation, which the parser tolerates.
 
 ## 4. Architecture
 

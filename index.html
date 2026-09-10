@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ders Programı İhtimalleri</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1c2024; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2563eb; --accent-soft: #eaf1ff;
+    --warn: #b45309; --warn-soft: #fff7ed;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--ink); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 32px; text-align: center;
+          background: var(--card); cursor: pointer; }
+  #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+
+  .bar { position: sticky; top: 0; z-index: 5; background: var(--card);
+         border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
+         margin-bottom: 16px; display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+  .stat b { font-size: 20px; } .stat span { color: var(--muted); }
+
+  #search { width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+            border-radius: 8px; font: inherit; }
+
+  /* Content-sized chips in a wrapping row, so rows stay ragged rather than gridded. */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+           max-height: 340px; overflow-y: auto; }
+  .chip { position: relative; }
+  .chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .chip span { display: inline-block; padding: 6px 12px; border: 1px solid var(--line);
+               border-radius: 999px; background: var(--card); cursor: pointer;
+               white-space: nowrap; user-select: none; }
+  .chip input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .chip .cr { opacity: .65; margin-left: 6px; }
+
+  #tip { position: fixed; z-index: 50; max-width: 320px; padding: 8px 10px; border-radius: 8px;
+         background: #111827; color: #fff; font-size: 12px; line-height: 1.45;
+         pointer-events: none; display: none; }
+  #tip b { display: block; margin-bottom: 4px; }
+
+  .warn { background: var(--warn-soft); border-color: #fed7aa; color: var(--warn); }
+  .err  { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ders Programı İhtimalleri</h1>
+  <p class="sub">Ders programı XLSX dosyanı yükle, derslerini seç, en iyi haftalık programları gör.
+    Dosya bilgisayarından çıkmaz.</p>
+
+  <div id="drop">
+    <strong>XLSX dosyasını buraya sürükle</strong><br>
+    <span class="sub">veya tıklayarak seç</span>
+    <input id="file" type="file" accept=".xlsx" hidden>
+  </div>
+
+  <div id="error" class="card err hidden"></div>
+  <div id="warnings" class="card warn hidden"></div>
+
+  <div id="app" class="hidden">
+    <div class="bar">
+      <div class="stat"><b id="credits">0</b> <span>kredi seçildi</span></div>
+      <div class="stat"><b id="count">0</b> <span>ders</span></div>
+      <div class="stat">
+        <select id="gno">
+          <option value="0">GNO seç…</option>
+          <option value="30">1. sınıf — 30 AKTS</option>
+          <option value="31">GNO ≤ 2.49 — 31 AKTS</option>
+          <option value="37">GNO 2.50–3.49 — 37 AKTS</option>
+          <option value="43">GNO ≥ 3.50 — 43 AKTS</option>
+          <option value="45">ÇAP — 45 AKTS</option>
+        </select>
+        <span id="gauge" class="sub"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <input id="search" type="search" placeholder="Ders kodu, ad veya öğretim üyesi ara…">
+      <div id="chips" class="chips"></div>
+    </div>
+  </div>
+</main>
+<div id="tip" role="tooltip"></div>
+
+<script src="src/xlsx-reader.js"></script>
+<script src="src/course-parser.js"></script>
+<script src="src/scoring.js"></script>
+<script src="src/solver.js"></script>
+<script src="src/ui.js"></script>
+</body>
+</html>

@@ -1,7 +1,11 @@
 'use strict';
 (function () {
   const $ = (id) => document.getElementById(id);
-  const state = { courses: [], warnings: [], selected: new Set(), prefs: null, akts: false };
+  const state = {
+    courses: [], warnings: [], selected: new Set(), prefs: null, akts: false,
+    // Controls that are not scoring preferences but still worth remembering.
+    ui: { overlap: false, gno: '0' },
+  };
 
   const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   // Spreadsheet-derived text (course codes, titles, instructor names, etc.) is
@@ -21,8 +25,47 @@
     .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ş/g, 's')
     .replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ç/g, 'c');
 
-  async function loadFile(file) {
+  // Everything derived from the previously loaded file. Without this a second
+  // load would leave the first file's schedules, status line and selection on
+  // screen while the chip list showed the new file's courses.
+  function resetForNewFile() {
     $('error').classList.add('hidden');
+    $('results').innerHTML = '';
+    $('status').textContent = '';
+    $('search').value = '';
+    $('tip').style.display = 'none';
+    state.courses = [];
+    state.warnings = [];
+    state.selected = new Set();
+  }
+
+  // Spec §9.1: the drop zone is replaced by a compact summary, not removed —
+  // removing it would make loading a second file impossible without a reload.
+  function renderFileSummary(file) {
+    $('drop').classList.add('loaded');
+    $('dropinner').innerHTML =
+      '<strong>' + escapeHtml(file.name) + '</strong>' +
+      '<span class="sub">' + state.courses.length + ' ders · ' +
+      state.warnings.length + ' uyarı</span>' +
+      '<button id="rechoose" type="button">Başka dosya seç</button>';
+  }
+
+  function applyPrefsToControls() {
+    $('fdw').value = state.prefs.freeDayWeight;
+    $('fdwOut').textContent = state.prefs.freeDayWeight;
+    $('cmp').value = state.prefs.compactness;
+    $('cmpOut').textContent = state.prefs.compactness;
+    // Without this line a restored maxGap is lost the moment the user solves:
+    // readPrefs() would read the still-empty #maxgap and write back null.
+    $('maxgap').value = state.prefs.maxGap == null ? '' : state.prefs.maxGap;
+    $('single').checked = state.prefs.avoidSingleCourseDays;
+    $('overlap').checked = state.ui.overlap;
+    const gno = $('gno');
+    if ([...gno.options].some((option) => option.value === state.ui.gno)) gno.value = state.ui.gno;
+  }
+
+  async function loadFile(file) {
+    resetForNewFile();
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { rows } = await XlsxReader.readWorkbook(bytes);
@@ -33,17 +76,14 @@
       state.akts = Boolean(cols.akts);
       state.prefs = Scoring.defaultPrefs();
       restore();
-      $('drop').classList.add('hidden');
+      renderFileSummary(file);
       $('app').classList.remove('hidden');
       renderWarnings();
       renderChips();
+      renderTray();
+      applyPrefsToControls();
       renderSummary();
       renderFreeDays();
-      $('fdw').value = state.prefs.freeDayWeight;
-      $('fdwOut').textContent = state.prefs.freeDayWeight;
-      $('cmp').value = state.prefs.compactness;
-      $('cmpOut').textContent = state.prefs.compactness;
-      $('single').checked = state.prefs.avoidSingleCourseDays;
     } catch (err) {
       showError(err.message || String(err));
     }
@@ -59,7 +99,11 @@
     const more = state.warnings.length > 12
       ? '<li>…ve ' + (state.warnings.length - 12) + ' tane daha</li>' : '';
     box.innerHTML = '<strong>' + state.warnings.length +
-      ' bölüm tam okunamadı ve planlamaya dahil edilmedi:</strong><ul>' + list + more + '</ul>';
+      ' bölüm tam okunamadı ve planlamaya dahil edilmedi:</strong><ul>' + list + more + '</ul>' +
+      // Kesilmiş ama geçerli görünen bir saat (ör. "T2T3" iken "T2") tespit
+      // edilemez, bu yüzden uyarı listesi tam güvence vermez.
+      '<p class="sub">Yine de programındaki ders saatlerini resmi ders programıyla ' +
+      'karşılaştırıp doğrula: kesilmiş ama geçerli görünen bir saat uyarı üretmez.</p>';
   }
 
   function chipLabel(course) {
@@ -90,6 +134,7 @@
         if (input.checked) state.selected.add(course.base);
         else state.selected.delete(course.base);
         persist();
+        renderTray();
         renderSummary();
       });
       const span = document.createElement('span');
@@ -105,6 +150,54 @@
       note.className = 'sub';
       note.textContent = matches.length + ' dersten ilk 400 tanesi gösteriliyor — aramayı daraltın.';
       box.appendChild(note);
+    }
+  }
+
+  function deselect(base) {
+    state.selected.delete(base);
+    persist();
+    // The chip for this course may be filtered out of view, so re-render the
+    // whole list rather than trying to untick one specific checkbox.
+    renderChips();
+    renderTray();
+    renderSummary();
+  }
+
+  // Spec §9.5. The chip list is capped at 400 entries and filtered by the search
+  // box, so without this tray a selected course can scroll out of existence and
+  // become impossible to remove.
+  function renderTray() {
+    const box = $('tray');
+    box.innerHTML = '';
+    const chosen = state.courses.filter((c) => state.selected.has(c.base));
+    if (chosen.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'sub';
+      empty.textContent = 'Henüz ders seçmedin.';
+      box.appendChild(empty);
+      return;
+    }
+
+    const head = document.createElement('span');
+    head.className = 'sub';
+    head.textContent = 'Seçilen dersler (' + chosen.length + '):';
+    box.appendChild(head);
+
+    for (const course of chosen) {
+      const pick = document.createElement('span');
+      pick.className = 'pick';
+      const name = document.createElement('span');
+      // textContent, not innerHTML: course codes come from the spreadsheet.
+      name.textContent = course.base + (course.credit > 0 ? ' · ' + course.credit : '');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = course.base + ' dersini çıkar';
+      remove.setAttribute('aria-label', course.base + ' dersini seçimden çıkar');
+      remove.addEventListener('click', () => deselect(course.base));
+      pick.appendChild(name);
+      pick.appendChild(remove);
+      box.appendChild(pick);
     }
   }
 
@@ -124,9 +217,9 @@
 
   function wireTooltip() {
     const tip = $('tip');
-    $('chips').addEventListener('mouseover', (event) => {
-      const chip = event.target.closest('.chip');
-      if (!chip) return;
+    const chips = $('chips');
+
+    function showTip(chip) {
       const course = state.courses.find((c) => c.base === chip.dataset.base);
       if (!course) return;
       tip.innerHTML = tooltipFor(course);
@@ -138,11 +231,21 @@
       tip.style.top = fitsBelow
         ? (box.bottom + 8) + 'px'
         : Math.max(0, box.top - 8 - tipBox.height) + 'px';
-    });
-    $('chips').addEventListener('mouseout', (event) => {
-      if (!event.target.closest('.chip')) return;
-      tip.style.display = 'none';
-    });
+    }
+
+    // Chips are checkboxes, so they are reached by Tab as well as by pointer:
+    // a hover-only tooltip hides every detail from keyboard users.
+    for (const name of ['mouseover', 'focusin']) {
+      chips.addEventListener(name, (event) => {
+        const chip = event.target.closest('.chip');
+        if (chip) showTip(chip);
+      });
+    }
+    for (const name of ['mouseout', 'focusout']) {
+      chips.addEventListener(name, (event) => {
+        if (event.target.closest('.chip')) tip.style.display = 'none';
+      });
+    }
   }
 
   function renderSummary() {
@@ -168,6 +271,7 @@
     try {
       localStorage.setItem('dpi.selected', JSON.stringify([...state.selected]));
       localStorage.setItem('dpi.prefs', JSON.stringify(state.prefs));
+      localStorage.setItem('dpi.ui', JSON.stringify(state.ui));
     } catch (err) { /* private window or blocked storage: run without memory */ }
   }
 
@@ -178,13 +282,25 @@
         (base) => state.courses.some((c) => c.base === base)));
       const prefs = JSON.parse(localStorage.getItem('dpi.prefs') || 'null');
       if (prefs) state.prefs = Object.assign(Scoring.defaultPrefs(), prefs);
+      const ui = JSON.parse(localStorage.getItem('dpi.ui') || 'null');
+      if (ui) {
+        state.ui = {
+          overlap: Boolean(ui.overlap),
+          gno: String(ui.gno == null ? '0' : ui.gno),
+        };
+      }
     } catch (err) { state.selected = new Set(); }
   }
 
   function wire() {
     const drop = $('drop');
     drop.addEventListener('click', () => $('file').click());
-    $('file').addEventListener('change', (e) => e.target.files[0] && loadFile(e.target.files[0]));
+    $('file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      // Clear it so picking the SAME file twice still fires a change event.
+      e.target.value = '';
+      if (file) loadFile(file);
+    });
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {
@@ -194,7 +310,15 @@
       else showError('Bir dosya bırakmalısınız (ör. .xlsx) — sürüklenen içerik dosya değil.');
     });
     $('search').addEventListener('input', renderChips);
-    $('gno').addEventListener('change', renderSummary);
+    $('gno').addEventListener('change', () => {
+      state.ui.gno = $('gno').value;
+      renderSummary();
+      persist();
+    });
+    $('overlap').addEventListener('change', () => {
+      state.ui.overlap = $('overlap').checked;
+      persist();
+    });
     wireTooltip();
     $('fdw').addEventListener('input', () => { $('fdwOut').textContent = $('fdw').value; });
     $('cmp').addEventListener('input', () => { $('cmpOut').textContent = $('cmp').value; });
@@ -294,9 +418,20 @@
     return html + '</tbody></table></div>';
   }
 
-  function renderResults(output) {
+  function renderResults(output, chosen) {
     const box = $('results');
     box.innerHTML = '';
+
+    // A selected course with no readable meeting times contributes nothing to
+    // the search. Dropping it quietly would hand the user a timetable that is
+    // missing a course they asked for, with no way to notice.
+    const skipped = output.skipped || [];
+    if (skipped.length > 0) {
+      box.innerHTML += '<div class="card warn"><strong>Şu dersler programa eklenemedi: ' +
+        skipped.map(escapeHtml).join(', ') + '</strong><br>' +
+        'Bu derslerin ders saatleri dosyadan okunamadı, bu yüzden yerleştirilemediler. ' +
+        'Saatlerini resmi ders programından kendin kontrol etmelisin.</div>';
+    }
 
     // Show the truncation notice regardless of whether any results were found:
     // an empty result from a cut-off search means something different (search
@@ -307,8 +442,15 @@
     }
 
     if (output.results.length === 0) {
-      box.innerHTML += '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
-        'Madde 18/2 seçeneğini açmayı ya da bir dersi çıkarmayı deneyebilirsin.</div>';
+      // "No conflict-free combination" is the wrong diagnosis when there was
+      // nothing to combine in the first place — every course was unreadable.
+      const nothingToPlan = chosen.length > 0 && skipped.length === chosen.length;
+      box.innerHTML += nothingToPlan
+        ? '<div class="card err">Seçtiğin derslerin hiçbirinin ders saati okunamadı, ' +
+          'bu yüzden program üretilemedi. Bu bir çakışma sorunu değil: dosyadaki saat ' +
+          'bilgileri eksik. Ders saatlerini içeren tam bir dosya yüklemeyi deneyebilirsin.</div>'
+        : '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
+          'Madde 18/2 seçeneğini açmayı ya da bir dersi çıkarmayı deneyebilirsin.</div>';
       return;
     }
 
@@ -316,7 +458,9 @@
       const card = document.createElement('div');
       card.className = 'sched';
       const breakdown = entry.breakdown
-        .map((item) => item.label + ' ' + (item.points > 0 ? '+' : '') + item.points)
+        // The label is built from persisted prefs (a restored freeDays entry
+        // lands in it verbatim), so it is not trusted markup.
+        .map((item) => escapeHtml(item.label) + ' ' + (item.points > 0 ? '+' : '') + item.points)
         .join(' · ') || 'nötr';
       const badge = entry.overlapHours > 0
         ? '<span class="badge">' + entry.overlapHours +
@@ -346,10 +490,10 @@
       });
       $('status').textContent = output.considered + ' kombinasyon tarandı · ' +
         (Date.now() - started) + ' ms';
-      renderResults(output);
+      renderResults(output, chosen);
     }, 0);
   }
 
   wire();
-  window.UI = { state, renderChips, renderSummary };
+  window.UI = { state, renderChips, renderTray, renderSummary };
 })();

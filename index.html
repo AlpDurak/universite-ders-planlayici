@@ -20,8 +20,23 @@
           padding: 16px; margin-bottom: 16px; }
 
   #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 32px; text-align: center;
-          background: var(--card); cursor: pointer; }
+          background: var(--card); cursor: pointer; margin-bottom: 16px; }
   #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  /* Once a file is loaded the zone shrinks to a summary line but stays a target,
+     so a second file can be dropped or picked without reloading the page. */
+  #drop.loaded { padding: 12px 16px; text-align: left; }
+  #drop.loaded #dropinner { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  #rechoose { margin-left: auto; padding: 5px 10px; border: 1px solid var(--line);
+              background: var(--card); border-radius: 8px; font: inherit; cursor: pointer; }
+
+  .tray { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+  .tray .pick { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px;
+                border: 1px solid var(--accent); border-radius: 999px;
+                background: var(--accent-soft); white-space: nowrap; }
+  .tray .pick button { border: 0; background: none; font: inherit; line-height: 1; cursor: pointer;
+                       color: var(--muted); padding: 2px 6px; border-radius: 999px; }
+  .tray .pick button:hover { background: #fff; color: #b91c1c; }
+  .note { margin: 4px 0 12px; }
 
   .bar { position: sticky; top: 0; z-index: 5; background: var(--card);
          border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
@@ -79,7 +94,7 @@
                   #fecaca 6px, #fecaca 12px); color: #b91c1c; border-color: #f87171; }
   .scroll { overflow-x: auto; }
   @media print {
-    #drop, .bar, .prefs-card, #search, .chips, #warnings { display: none !important; }
+    #drop, .bar, .prefs-card, #search, .chips, .tray, #warnings { display: none !important; }
     .sched { border-color: #999; }
   }
 </style>
@@ -91,10 +106,14 @@
     Dosya bilgisayarından çıkmaz.</p>
 
   <div id="drop">
-    <strong>XLSX dosyasını buraya sürükle</strong><br>
-    <span class="sub">veya tıklayarak seç</span>
-    <input id="file" type="file" accept=".xlsx" hidden>
+    <div id="dropinner">
+      <strong>XLSX dosyasını buraya sürükle</strong><br>
+      <span class="sub">veya tıklayarak seç</span>
+    </div>
   </div>
+  <!-- Outside #drop on purpose: a hidden input inside its own click handler's
+       element re-triggers that handler when opened programmatically. -->
+  <input id="file" type="file" accept=".xlsx" hidden>
 
   <div id="error" class="card err hidden"></div>
   <div id="warnings" class="card warn hidden"></div>
@@ -118,6 +137,7 @@
 
     <div class="card">
       <input id="search" type="search" placeholder="Ders kodu, ad veya öğretim üyesi ara…">
+      <div id="tray" class="tray"></div>
       <div id="chips" class="chips"></div>
     </div>
 
@@ -143,6 +163,8 @@
             Madde 18/2: en fazla 2 ders 1'er saat çakışabilsin</label>
         </div>
       </div>
+      <p class="sub note">Ön koşul ve eş koşul kontrolü yapılmaz. Seçtiğin derslerin
+        ön koşullarını ve eş koşullarını kendin doğrulamalısın.</p>
       <button id="go" class="primary">En iyi 10 programı hesapla</button>
       <span id="status" class="sub"></span>
     </div>

@@ -70,6 +70,29 @@ test('Madde 18 mode rejects a third overlapping pair', () => {
   assert.strictEqual(Solver.solve(courses, prefs(), { allowOverlap: true }).results.length, 0);
 });
 
+// The lecture and the lab are two separate pick-one groups at two different
+// search depths, so a depth-keyed pair counter reads them as two courses and
+// happily lets a student attend both at once.
+test('Madde 18 never lets a course overlap its own lab', () => {
+  const a = course('A', {
+    LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])],
+    LAB: [sec('A-L.1', 'A', 'LAB', [[0, 1]])],
+  });
+  assert.strictEqual(Solver.solve([a], prefs(), { allowOverlap: true }).results.length, 0);
+});
+
+// Two sections of the same course overlapping a third course must still count
+// as ONE pair, not two, or the 2-pair allowance is silently doubled.
+test('Madde 18 counts a lecture and its lab against one shared pair', () => {
+  const a = course('A', {
+    LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])],
+    LAB: [sec('A-L.1', 'A', 'LAB', [[1, 1]])],
+  });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 1], [1, 1]])] });
+  // A/B share two hours: one pair, two hours — over the one-hour-per-pair cap.
+  assert.strictEqual(Solver.solve([a, b], prefs(), { allowOverlap: true }).results.length, 0);
+});
+
 test('Madde 18 mode rejects a single pair overlapping two hours', () => {
   const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1], [0, 2]])] });
   const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 1], [0, 2]])] });
@@ -116,6 +139,78 @@ test('an unscheduled section is excluded from the search', () => {
   const { results } = Solver.solve([course('A', { LEC: [bad, good] })], prefs(), {});
   assert.strictEqual(results.length, 1);
   assert.strictEqual(results[0].sections[0].code, 'A.2');
+});
+
+// Spec §7.1: memory stays flat regardless of search size because only K results
+// are retained. Retaining every leaf and slicing at the end is what crashed the
+// tab, so the top-K set has to be maintained DURING the search.
+test('a large search retains only the top `limit` results', () => {
+  // Four courses of five sections each: 625 leaves, every one conflict-free and
+  // every one a distinct timetable — over 15x the limit*4 compaction threshold.
+  // Each course owns its own hour band on its own day, so the only thing that
+  // separates the schedules is the gap left between the two bands of a day, and
+  // exactly one arrangement leaves no gap at all.
+  const band = (base, day, from) => course(base, {
+    LEC: [0, 1, 2, 3, 4].map(
+      (i) => sec(base + '.' + (i + 1), base, 'LEC', [[day, from + i]])),
+  });
+  const courses = [band('A', 0, 1), band('B', 0, 6), band('C', 1, 1), band('D', 1, 6)];
+  const p = prefs({ compactness: 1 });
+
+  const bounded = Solver.solve(courses, p, { limit: 10 });
+  // A limit that exceeds the leaf count disables both the floor and compaction,
+  // so this run is exactly the unbounded search the bounded one must agree with.
+  const unbounded = Solver.solve(courses, p, { limit: 625 });
+
+  assert.strictEqual(bounded.considered, 625, 'every leaf must still be visited');
+  assert.strictEqual(unbounded.results.length, 625, 'reference run should keep everything');
+  assert.ok(bounded.results.length <= 10,
+    'bounded run returned ' + bounded.results.length + ' results, over the limit');
+  assert.strictEqual(bounded.results.length, 10);
+  // The returned list is sliced either way, so only the retained count can tell
+  // a bounded search apart from one that hoarded all 625 leaves and sliced last.
+  assert.ok(bounded.retained <= 40,
+    'held ' + bounded.retained + ' results during the search; must stay within limit*4');
+  assert.strictEqual(unbounded.retained, 625, 'reference run should hold every leaf');
+
+  // A.5 ends at M5 and B.1 starts at M6 (same for C.5/D.1 on Tuesday), so this
+  // is the one and only zero-gap schedule — the best result is unambiguous.
+  assert.strictEqual(bounded.results[0].rawScore, 0);
+  assert.deepStrictEqual(bounded.results[0].sections.map((s) => s.code).sort(),
+    ['A.5', 'B.1', 'C.5', 'D.1']);
+  assert.deepStrictEqual(bounded.results[0].sections.map((s) => s.code),
+    unbounded.results[0].sections.map((s) => s.code),
+    'bounded search must return the same best schedule as the unbounded one');
+});
+
+test('a course whose every section is unusable is reported in `skipped`', () => {
+  const bad = sec('B.1', 'B', 'LEC', [[0, 1]]);
+  bad.truncated = true;
+  const out = Solver.solve(
+    [course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] }), course('B', { LEC: [bad] })],
+    prefs(), {});
+  // The old behaviour was to return this schedule with B simply absent.
+  assert.deepStrictEqual(out.skipped, ['B']);
+  assert.deepStrictEqual(out.results[0].sections.map((s) => s.code), ['A.1']);
+});
+
+test('a course with one usable section is not reported in `skipped`', () => {
+  const bad = sec('A.1', 'A', 'LEC', [[0, 1]]);
+  bad.truncated = true;
+  const good = sec('A.2', 'A', 'LEC', [[0, 2]]);
+  assert.deepStrictEqual(
+    Solver.solve([course('A', { LEC: [bad, good] })], prefs(), {}).skipped, []);
+});
+
+test('every course unusable yields no results and a full `skipped` list', () => {
+  const mk = (n) => {
+    const bad = sec(n + '.1', n, 'LEC', [[0, 1]]);
+    bad.unscheduled = true;
+    return course(n, { LEC: [bad] });
+  };
+  const out = Solver.solve([mk('A'), mk('B')], prefs(), {});
+  assert.strictEqual(out.results.length, 0);
+  assert.deepStrictEqual(out.skipped, ['A', 'B']);
 });
 
 const fs = require('node:fs');

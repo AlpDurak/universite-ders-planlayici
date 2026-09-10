@@ -15,17 +15,23 @@
 
   // A group is a mandatory pick-one. Sections we cannot place are dropped here,
   // so a truncated row never contributes unknown meeting times to a timetable.
+  // A course whose every section is dropped would otherwise vanish from the
+  // timetable unannounced, so its base code is reported back in `skipped`.
   function buildGroups(courses) {
     const groups = [];
+    const skipped = [];
     for (const course of courses) {
+      let usable = 0;
       for (const kind of ['LEC', 'LAB', 'PS']) {
         const options = course.groups[kind].filter(
           (s) => !s.truncated && !s.unscheduled && s.slots.length > 0);
-        if (options.length > 0) groups.push({ base: course.base, kind, options });
+        if (options.length > 0) { groups.push({ base: course.base, kind, options }); usable++; }
       }
+      if (usable === 0) skipped.push(course.base);
     }
     // Fewest options first: conflicts surface early and prune more.
-    return groups.sort((a, b) => a.options.length - b.options.length);
+    groups.sort((a, b) => a.options.length - b.options.length);
+    return { groups, skipped };
   }
 
   function signatureOf(sections) {
@@ -38,7 +44,11 @@
 
   function solve(courses, prefs, options) {
     const opts = Object.assign({ limit: 10, allowOverlap: false, nodeCap: 2000000 }, options || {});
-    const groups = buildGroups(courses);
+    const { groups, skipped } = buildGroups(courses);
+    // Retained results are compacted back to `limit` whenever they exceed this,
+    // so peak memory is a small constant multiple of the requested result count
+    // no matter how many leaves the search visits.
+    const COMPACT_AT = Math.max(opts.limit * 4, 1);
 
     const occupancy = new Uint16Array(DAYS.length);
     const owner = new Int16Array(DAYS.length * (MAX_HOUR + 1)).fill(-1);
@@ -50,6 +60,9 @@
     let explored = 0;
     let considered = 0;
     let truncated = false;
+    // Worst rawScore currently retained. Only meaningful once `results` holds at
+    // least `limit` entries; until then nothing can be ruled out.
+    let floor = -Infinity;
 
     function overlapTotal() {
       let total = 0;
@@ -57,9 +70,16 @@
       return total;
     }
 
+    // Madde 18/2 counts COURSES, not groups. Keying the pair on the group depth
+    // would let a lecture "legally" overlap its own lab (two different depths,
+    // one course), so the key is built from the base course codes instead.
+    function pairKey(a, b) {
+      return a < b ? a + '|' + b : b + '|' + a;
+    }
+
     // Returns the list of (day, hour, previousOwner) triples this section collides
     // with, or null when the collision is not permissible.
-    function collisionsFor(section, index) {
+    function collisionsFor(section) {
       const hits = [];
       for (const slot of section.slots) {
         if ((occupancy[slot.day] & (1 << (slot.hour - 1))) === 0) continue;
@@ -72,7 +92,11 @@
       for (const slot of hits) {
         const previous = owner[slot.day * (MAX_HOUR + 1) + slot.hour];
         if (previous < 0) return null;
-        const key = previous < index ? previous + '-' + index : index + '-' + previous;
+        const previousBase = chosen[previous].base;
+        // A course can never overlap itself: no allowance covers a student being
+        // in their own lecture and their own lab at the same hour.
+        if (previousBase === section.base) return null;
+        const key = pairKey(previousBase, section.base);
         const next = (trial.get(key) || 0) + 1;
         if (next > MAX_HOURS_PER_PAIR) return null;
         trial.set(key, next);
@@ -89,7 +113,7 @@
       }
       for (const slot of hits) {
         const previous = owner[slot.day * (MAX_HOUR + 1) + slot.hour];
-        const key = previous < index ? previous + '-' + index : index + '-' + previous;
+        const key = pairKey(chosen[previous].base, section.base);
         pairHours.set(key, (pairHours.get(key) || 0) + 1);
       }
     }
@@ -101,6 +125,24 @@
       for (const [key, value] of savedPairs) pairHours.set(key, value);
     }
 
+    const rank = (a, b) => (b.rawScore - a.rawScore) || (a.overlapHours - b.overlapHours);
+
+    function worstRetained() {
+      let min = Infinity;
+      for (const entry of results) if (entry.rawScore < min) min = entry.rawScore;
+      return min;
+    }
+
+    // Throw away everything that provably cannot reach the top `limit`, then
+    // rebuild the signature index from the survivors so it cannot outgrow them.
+    function compact() {
+      results.sort(rank);
+      results.length = Math.min(results.length, opts.limit);
+      bySignature.clear();
+      for (const entry of results) bySignature.set(entry.signature, entry);
+      floor = worstRetained();
+    }
+
     function record() {
       considered++;
       const evaluation = Scoring.scoreSchedule(chosen, prefs);
@@ -110,6 +152,8 @@
       const existing = bySignature.get(signature);
       if (existing) {
         // Same timetable, different section numbers: keep it as an alternative.
+        // This runs even below the floor — a known timetable that is already
+        // retained must still be able to collect its interchangeable sections.
         const codes = existing.sections.map((s) => s.code).join(',');
         const candidate = chosen.map((s) => s.code).join(',');
         if (codes !== candidate && existing.alternates.length < 20) {
@@ -118,8 +162,14 @@
         return;
       }
 
+      // Once `limit` results are held, a strictly worse score is ranked behind
+      // all of them and can never make the final cut, so it is never retained.
+      // Equal scores are kept: they may still win on the overlap tie-break.
+      if (results.length >= opts.limit && evaluation.score < floor) return;
+
       const entry = {
         sections: chosen.slice(),
+        signature,
         rawScore: evaluation.score,
         score: evaluation.score,
         breakdown: evaluation.breakdown,
@@ -128,6 +178,9 @@
       };
       bySignature.set(signature, entry);
       results.push(entry);
+
+      if (results.length > COMPACT_AT) compact();
+      else if (results.length >= opts.limit) floor = worstRetained();
     }
 
     function search(depth) {
@@ -137,7 +190,7 @@
       for (const section of groups[depth].options) {
         if (++explored > opts.nodeCap) { truncated = true; return; }
 
-        const hits = collisionsFor(section, depth);
+        const hits = collisionsFor(section);
         if (hits === null) continue;
 
         const savedMask = occupancy.slice();
@@ -157,7 +210,11 @@
     if (groups.length > 0) search(0);
 
     // Clean schedules outrank equally-scoring ones that lean on Madde 18.
-    results.sort((a, b) => (b.rawScore - a.rawScore) || (a.overlapHours - b.overlapHours));
+    results.sort(rank);
+    // How many entries were still being held when the search ended. Bounded by
+    // COMPACT_AT no matter how many leaves were visited; reported so the memory
+    // guarantee is observable (and testable) rather than merely intended.
+    const retained = results.length;
     const top = results.slice(0, opts.limit);
 
     const best = top.length ? top[0].rawScore : 0;
@@ -166,7 +223,7 @@
       entry.score = best === worst ? 100 : Math.round(((entry.rawScore - worst) / (best - worst)) * 100);
     }
 
-    return { results: top, truncated, explored, considered };
+    return { results: top, truncated, explored, considered, skipped, retained };
   }
 
   return { solve, MAX_OVERLAP_PAIRS, MAX_HOURS_PER_PAIR };

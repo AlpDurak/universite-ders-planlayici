@@ -49,10 +49,18 @@
   const QUOTA_RE = /^\d+\s*\/\s*\d+$/;
   const INT_RE = /^\d+$/;
 
+  // Excel column order is not lexicographic ('Z' precedes 'AA') and it is NOT
+  // the order the keys happen to appear in: a column that is blank in the first
+  // body row is first seen much later and would sort out of place, which in turn
+  // mis-picks which text column is campus and which parts are the instructor.
+  function compareColumns(a, b) {
+    return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+  }
+
   function columnLetters(rows) {
     const seen = new Set();
     for (const row of rows) for (const key of Object.keys(row)) seen.add(key);
-    return [...seen];
+    return [...seen].sort(compareColumns);
   }
 
   // Fraction of non-empty values in this column that satisfy `predicate`.
@@ -91,8 +99,10 @@
       throw err;
     }
 
-    const slots = bestColumn(body, letters.filter((l) => l !== code),
-      (v) => !parseSlots(v).truncated && parseSlots(v).slots.length > 0, 0.3);
+    const slots = bestColumn(body, letters.filter((l) => l !== code), (v) => {
+      const parsed = parseSlots(v);
+      return !parsed.truncated && parsed.slots.length > 0;
+    }, 0.3);
     if (!slots) {
       const err = new Error(
         'Ders saati sütunu bulunamadı. "T2T3T4" veya "Th2Th3" gibi değerler bekleniyordu.');
@@ -218,8 +228,11 @@
       const title = (row[cols.title] || '').trim();
       const slotInfo = parseSlots(row[cols.slots]);
       const rawSlots = (row[cols.slots] || '').trim();
+      // Truncated *and* non-empty: a blank cell is an unscheduled section, which
+      // is a different (and unremarkable) thing from a cut-off one.
+      const unreadableSlots = slotInfo.truncated && rawSlots !== '';
 
-      if (slotInfo.truncated && rawSlots !== '') {
+      if (unreadableSlots) {
         warnings.push({
           code: String(rawCode).trim(),
           warningCode: 'TRUNCATED_SLOTS',
@@ -242,7 +255,7 @@
         instructor: (cols.instructorParts || [])
           .map((letter) => (row[letter] || '').trim()).filter(Boolean).join(' '),
         quota: cols.quota ? parseQuota(row[cols.quota]) : null,
-        truncated: slotInfo.truncated && rawSlots !== '',
+        truncated: unreadableSlots,
         unscheduled: rawSlots === '',
       };
 

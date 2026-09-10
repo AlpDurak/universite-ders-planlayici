@@ -162,8 +162,9 @@ against the data shape of a sample of rows:
 | campus | small distinct-value set drawn from text |
 | akts (optional) | integer column distinct from `hours`, populated on `LEC` rows; absent in the reference file (§11) |
 
-The column with the highest match rate wins each role. Header text is used only
-to break ties. This survives reordering and mislabeling in future exports.
+The column with the highest match rate wins each role. Header text is **not read
+at all** — the header row is discarded before scoring, so no role can be swayed by
+a mislabelled heading. This survives reordering and mislabeling in future exports.
 
 If a required role (code, title, slots) cannot be identified, the app reports
 which one failed instead of producing an empty list.

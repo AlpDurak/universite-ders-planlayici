@@ -761,7 +761,8 @@ In `src/course-parser.js`, add before the `return` statement:
         hours: cols.hours ? Number(row[cols.hours] || 0) : slotInfo.slots.length,
         akts: cols.akts ? Number(row[cols.akts] || 0) : null,
         campus: cols.campus ? (row[cols.campus] || '') : '',
-        instructor: cols.instructor ? (row[cols.instructor] || '').trim() : '',
+        instructor: (cols.instructorParts || [])
+          .map((letter) => (row[letter] || '').trim()).filter(Boolean).join(' '),
         quota: cols.quota ? parseQuota(row[cols.quota]) : null,
         truncated: slotInfo.truncated && rawSlots !== '',
         unscheduled: rawSlots === '',

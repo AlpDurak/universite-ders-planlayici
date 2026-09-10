@@ -57,3 +57,38 @@ test('parseCredit reads the trailing parenthesis only', () => {
   assert.strictEqual(P.parseCredit('SEKTÖR STAJI'), 0);
   assert.strictEqual(P.parseCredit('Global 20.Yüzyıl Sanatı (3)'), 3);
 });
+
+const fs = require('node:fs');
+const path = require('node:path');
+const R = require('../src/xlsx-reader.js');
+const FIXTURE = path.join(__dirname, 'fixtures', '2026_Guz_Haftalik_Ders_Programi.xlsx');
+
+test('detectColumns finds the right roles despite mislabeled headers', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const cols = P.detectColumns(rows);
+  assert.strictEqual(cols.code, 'A');
+  assert.strictEqual(cols.title, 'B');
+  assert.strictEqual(cols.quota, 'C');
+  assert.strictEqual(cols.campus, 'D');
+  assert.strictEqual(cols.slots, 'G');   // header wrongly says 'Ders Saati'
+  assert.strictEqual(cols.hours, 'I');   // header wrongly says 'Ders Saati(leri)'
+  assert.strictEqual(cols.akts, null);   // this file has no AKTS column
+});
+
+test('detectColumns survives shuffled columns', () => {
+  const rows = [
+    { Z: 'Ders Kodu', Y: 'Başlık', X: 'Saat' },
+    { Z: 'COMP1111.1', Y: 'Programlama Temelleri (4)', X: 'T2T3T4' },
+    { Z: 'COMP1111.2', Y: 'Programlama Temelleri (4)', X: 'T1T2T3' },
+    { Z: 'MATH1111.1', Y: 'Kalkülüs (4)', X: 'M1M2M3' },
+  ];
+  const cols = P.detectColumns(rows);
+  assert.strictEqual(cols.code, 'Z');
+  assert.strictEqual(cols.title, 'Y');
+  assert.strictEqual(cols.slots, 'X');
+});
+
+test('detectColumns names the role it could not find', () => {
+  const rows = [{ A: 'h' }, { A: 'no codes here' }, { A: 'still none' }];
+  assert.throws(() => P.detectColumns(rows), /code/i);
+});

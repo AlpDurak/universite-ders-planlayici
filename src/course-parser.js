@@ -46,5 +46,129 @@
     return match ? parseInt(match[1], 10) : 0;
   }
 
-  return { DAYS, MAX_HOUR, parseCode, parseSlots, parseCredit };
+  const QUOTA_RE = /^\d+\s*\/\s*\d+$/;
+  const INT_RE = /^\d+$/;
+
+  function columnLetters(rows) {
+    const seen = new Set();
+    for (const row of rows) for (const key of Object.keys(row)) seen.add(key);
+    return [...seen];
+  }
+
+  // Fraction of non-empty values in this column that satisfy `predicate`.
+  function matchRate(rows, letter, predicate) {
+    let total = 0;
+    let hits = 0;
+    for (const row of rows) {
+      const value = row[letter];
+      if (value == null || value === '') continue;
+      total++;
+      if (predicate(value)) hits++;
+    }
+    return total === 0 ? 0 : hits / total;
+  }
+
+  function bestColumn(rows, letters, predicate, threshold) {
+    let best = null;
+    let bestRate = threshold;
+    for (const letter of letters) {
+      const rate = matchRate(rows, letter, predicate);
+      if (rate > bestRate) { bestRate = rate; best = letter; }
+    }
+    return best;
+  }
+
+  function detectColumns(rows) {
+    // Skip the header row: its text would otherwise pollute every match rate.
+    const body = rows.slice(1);
+    const letters = columnLetters(body);
+
+    const code = bestColumn(body, letters, (v) => parseCode(v) !== null, 0.5);
+    if (!code) {
+      throw new Error(
+        'Could not find the course-code column. Expected values like "COMP1111.1" or "COMP1111-L.1".');
+    }
+
+    const slots = bestColumn(body, letters.filter((l) => l !== code),
+      (v) => !parseSlots(v).truncated && parseSlots(v).slots.length > 0, 0.3);
+    if (!slots) {
+      throw new Error(
+        'Could not find the class-hours column. Expected values like "T2T3T4" or "Th2Th3".');
+    }
+
+    const used = [code, slots];
+    const rest = letters.filter((l) => !used.includes(l));
+
+    const title = bestColumn(body, rest, (v) => CREDIT_RE.test(v), 0.1)
+      || bestColumn(body, rest, (v) => /[A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç]{4,}/.test(v), 0.5);
+    if (!title) {
+      throw new Error('Could not find the course-title column.');
+    }
+    used.push(title);
+
+    const quota = bestColumn(body, letters.filter((l) => !used.includes(l)),
+      (v) => QUOTA_RE.test(v), 0.5);
+    if (quota) used.push(quota);
+
+    // Contact hours vs AKTS: both are integer columns, so "is an integer" cannot
+    // tell them apart. Contact hours is the one that tracks the slot count.
+    //
+    // Do NOT use a fixed agreement threshold. In the reference file column I
+    // agrees with the slot count on only 89% of rows — 101 rows legitimately
+    // disagree because the hours figure includes untimetabled practicum time
+    // (AHİZ1111.1 reports 4 hours for 3 scheduled slots). Any threshold above
+    // 0.89 misidentifies the real hours column; any threshold low enough to
+    // admit it is an arbitrary number that a different file would break.
+    // Ranking sidesteps the guess: the best-tracking integer column is hours,
+    // and a second integer column alongside it is AKTS.
+    const slotAgreementRate = (letter) => {
+      const comparable = body.filter((r) => r[letter] && r[slots]);
+      if (comparable.length === 0) return 0;
+      const agreeing = comparable.filter((r) => {
+        const parsed = parseSlots(r[slots]);
+        return parsed.truncated || Number(r[letter]) === parsed.slots.length;
+      });
+      return agreeing.length / comparable.length;
+    };
+
+    const integerColumns = letters
+      .filter((l) => !used.includes(l))
+      .filter((l) => matchRate(body, l, (v) => INT_RE.test(v)) > 0.8)
+      .map((l) => ({ letter: l, rate: slotAgreementRate(l) }))
+      .sort((a, b) => b.rate - a.rate);
+
+    const hours = integerColumns.length > 0 && integerColumns[0].rate > 0.5
+      ? integerColumns[0].letter
+      : null;
+    if (hours) used.push(hours);
+
+    // AKTS is only meaningful as a SECOND integer column beside a real hours
+    // column. Without that anchor, a lone unrelated integer column would be
+    // mislabelled AKTS and silently drive the load gauge.
+    const akts = hours && integerColumns.length > 1 ? integerColumns[1].letter : null;
+    if (akts) used.push(akts);
+
+    // Campus is a text column with only a handful of distinct values, so it is
+    // judged on the column as a whole rather than per-value.
+    let campus = null;
+    for (const letter of letters.filter((l) => !used.includes(l))) {
+      const values = body.map((r) => r[letter]).filter(Boolean);
+      const distinct = new Set(values);
+      if (values.length > body.length * 0.5 && distinct.size >= 2 && distinct.size <= 12) {
+        campus = letter;
+        break;
+      }
+    }
+    if (campus) used.push(campus);
+
+    const instructor = bestColumn(body, letters.filter((l) => !used.includes(l)),
+      (v) => /^[A-ZÀ-ÿĞİÖŞÜÇ][A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç .'-]*$/.test(v), 0.6);
+
+    return {
+      code, title, slots, quota: quota || null, hours,
+      campus: campus || null, instructor: instructor || null, akts,
+    };
+  }
+
+  return { DAYS, MAX_HOUR, parseCode, parseSlots, parseCredit, detectColumns };
 });

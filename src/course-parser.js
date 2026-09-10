@@ -137,6 +137,13 @@
       .map((l) => ({ letter: l, rate: slotAgreementRate(l) }))
       .sort((a, b) => b.rate - a.rate);
 
+    // The 0.5 floor below is not a hours-vs-AKTS discriminator (ranking already
+    // does that job) — it is only an existence check, rejecting a top-ranked
+    // integer column that tracks the slot count essentially not at all (e.g. a
+    // stray numeric column that happens to be the best of a bad lot). It is set
+    // deliberately far below the real file's observed 0.89 agreement rate so it
+    // never influences which column wins; it only ever says "none of these
+    // integer columns is plausibly hours."
     const hours = integerColumns.length > 0 && integerColumns[0].rate > 0.5
       ? integerColumns[0].letter
       : null;
@@ -161,12 +168,22 @@
     }
     if (campus) used.push(campus);
 
-    const instructor = bestColumn(body, letters.filter((l) => !used.includes(l)),
-      (v) => /^[A-ZÀ-ÿĞİÖŞÜÇ][A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç .'-]*$/.test(v), 0.6);
+    // The real file splits the instructor's name across two columns (given
+    // name, then surname), so a single "best" column would truncate it to
+    // just one part. Instead, collect every remaining column that looks
+    // name-shaped: `letters` already lists columns in ascending sheet order
+    // (see columnLetters/the row-object key order above), so filtering it
+    // in place yields given-name-before-surname for free, with no separate
+    // sort needed. Cap at 2 since a name has at most two parts worth reading.
+    const instructorParts = letters
+      .filter((l) => !used.includes(l))
+      .filter((l) => matchRate(body, l, (v) => /^[A-ZÀ-ÿĞİÖŞÜÇ][A-Za-zÀ-ÿĞğİıÖöŞşÜüÇç .'-]*$/.test(v)) > 0.6)
+      .slice(0, 2);
+    instructorParts.forEach((l) => used.push(l));
 
     return {
       code, title, slots, quota: quota || null, hours,
-      campus: campus || null, instructor: instructor || null, akts,
+      campus: campus || null, instructorParts, akts,
     };
   }
 

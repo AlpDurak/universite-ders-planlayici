@@ -75,6 +75,12 @@ test('detectColumns finds the right roles despite mislabeled headers', async () 
   assert.strictEqual(cols.akts, null);   // this file has no AKTS column
 });
 
+test('detectColumns finds both parts of a split instructor name', async () => {
+  const { rows } = await R.readWorkbook(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const cols = P.detectColumns(rows);
+  assert.deepStrictEqual(cols.instructorParts, ['E', 'F']);   // given name, then surname
+});
+
 test('detectColumns survives shuffled columns', () => {
   const rows = [
     { Z: 'Ders Kodu', Y: 'Başlık', X: 'Saat' },
@@ -91,4 +97,28 @@ test('detectColumns survives shuffled columns', () => {
 test('detectColumns names the role it could not find', () => {
   const rows = [{ A: 'h' }, { A: 'no codes here' }, { A: 'still none' }];
   assert.throws(() => P.detectColumns(rows), /code/i);
+});
+
+test('detectColumns names the class-hours role when no column holds slots', () => {
+  // Column A is clearly codes; column B has no digits at all, so it can
+  // never look like a day/hour slot string — no column can fill the slots role.
+  const rows = [
+    { A: 'Ders Kodu', B: 'Baslik' },
+    { A: 'COMP1111.1', B: 'nonsense text with no slot pattern' },
+    { A: 'COMP1111.2', B: 'more plain text here' },
+    { A: 'MATH1111.1', B: 'random words without digits' },
+  ];
+  assert.throws(() => P.detectColumns(rows), /slots|hours|saat/i);
+});
+
+test('detectColumns names the title role when no column looks like a title', () => {
+  // Only two columns exist: code and slots. Once both are claimed, there is
+  // nothing left for the title role to pick from.
+  const rows = [
+    { A: 'Ders Kodu', B: 'Saat' },
+    { A: 'COMP1111.1', B: 'T2T3T4' },
+    { A: 'COMP1111.2', B: 'T1T2T3' },
+    { A: 'MATH1111.1', B: 'M1M2M3' },
+  ];
+  assert.throws(() => P.detectColumns(rows), /title/i);
 });

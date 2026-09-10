@@ -1365,12 +1365,20 @@ test('end to end: real file, real courses, conflict-free results', async () => {
     path.join(__dirname, 'fixtures', '2026_Guz_Haftalik_Ders_Programi.xlsx')));
   const { rows } = await R.readWorkbook(bytes);
   const { courses } = P.buildCourses(rows, P.detectColumns(rows));
-  const picked = ['COMP1111', 'COMP1113', 'ARCH1102']
+  // These three genuinely co-exist, and COMP1111 contributes three identical-time
+  // lab sections, so this also exercises the dedup path on real data.
+  const picked = ['COMP1111', 'ARCH2210', 'ARCH2214']
     .map((base) => courses.find((c) => c.base === base));
   assert.ok(picked.every(Boolean), 'fixture courses missing');
 
   const { results } = Solver.solve(picked, S.DEFAULT_PREFS, { limit: 10 });
-  assert.ok(results.length > 0, 'expected at least one schedule');
+  assert.strictEqual(results.length, 2, 'expected two distinct timetables');
+  // COMP1111-L.1/.2/.3 all meet at Th2-Th3, so each result keeps one and carries
+  // the other two as interchangeable alternates rather than as duplicate results.
+  assert.strictEqual(results[0].alternates.length, 2);
+  for (const entry of results) {
+    assert.strictEqual(entry.overlapHours, 0, 'strict mode must not use the overlap allowance');
+  }
 
   for (const entry of results) {
     const seen = new Set();
@@ -1382,6 +1390,27 @@ test('end to end: real file, real courses, conflict-free results', async () => {
       }
     }
   }
+});
+```
+
+Also append this companion test, which pins a real impossible combination:
+
+```js
+// A real course set with NO conflict-free arrangement — the 'no results' path
+// users will actually hit. COMP1111's three lab sections all meet at Th2-Th3,
+// and COMP1113's only lecture occupies Th1-Th3, so the two can never co-exist.
+test('end to end: a genuinely impossible course set returns no schedules', async () => {
+  const bytes = new Uint8Array(fs.readFileSync(
+    path.join(__dirname, 'fixtures', '2026_Guz_Haftalik_Ders_Programi.xlsx')));
+  const { rows } = await R.readWorkbook(bytes);
+  const { courses } = P.buildCourses(rows, P.detectColumns(rows));
+  const picked = ['COMP1111', 'COMP1113'].map((base) => courses.find((c) => c.base === base));
+
+  assert.strictEqual(Solver.solve(picked, S.DEFAULT_PREFS, {}).results.length, 0);
+  // Not even the Madde 18 allowance rescues it: the clash is 2 hours on one pair,
+  // over the one-hour-per-pair limit.
+  assert.strictEqual(
+    Solver.solve(picked, S.DEFAULT_PREFS, { allowOverlap: true }).results.length, 0);
 });
 ```
 

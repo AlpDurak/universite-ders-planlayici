@@ -8,6 +8,8 @@ Ders programı XLSX dosyanı yükle, derslerini seç, haftalık programının **
 ![çevrimdışı](https://img.shields.io/badge/çalışma-tamamen%20çevrimdışı-blue)
 ![lisans](https://img.shields.io/badge/lisans-MIT-lightgrey)
 
+[Live DEMO](https://planner.alpdurak.com.tr/)
+
 Kurulum yok, sunucu yok, derleme adımı yok. `index.html` dosyasına çift tıkla, yeter.
 **Dosyan bilgisayarından hiç çıkmaz** — her şey tarayıcının içinde çalışır.
 

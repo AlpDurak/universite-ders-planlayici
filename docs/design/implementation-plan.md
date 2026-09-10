@@ -1,6 +1,7 @@
 # Ders Programı İhtimalleri — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Implementation plan, written before any code. Each task is test-first and ends
+> with an independently verifiable deliverable. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Build an offline, zero-dependency single-page web app that reads the university's lecture XLSX, lets the user pick courses from a searchable chip list, and shows the ten best weekly timetables under tunable preferences.
 
@@ -8,7 +9,7 @@
 
 **Tech Stack:** Vanilla ES2020 JavaScript, HTML, CSS. `node --test` for tests. No npm dependencies for the app itself.
 
-**Spec:** `docs/superpowers/specs/2026-09-10-ders-program-ihtimalleri-design.md`
+**Spec:** `docs/design/design.md`
 
 ## Global Constraints
 

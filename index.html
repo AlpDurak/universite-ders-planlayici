@@ -52,6 +52,34 @@
   .warn { background: var(--warn-soft); border-color: #fed7aa; color: var(--warn); }
   .err  { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
   .hidden { display: none !important; }
+
+  .prefs { display: flex; flex-wrap: wrap; gap: 24px; margin: 12px 0 16px; }
+  .prefs > div { min-width: 240px; flex: 1; }
+  .prefs label { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 13px; }
+  .prefs input[type=range] { width: 100%; }
+  .days { display: flex; gap: 6px; flex-wrap: wrap; }
+  .days button { padding: 5px 10px; border: 1px solid var(--line); background: var(--card);
+                 border-radius: 999px; cursor: pointer; font: inherit; }
+  .days button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary { padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent);
+                   color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+
+  .sched { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+           padding: 16px; margin-bottom: 16px; break-inside: avoid; }
+  .sched header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .sched h3 { margin: 0; font-size: 16px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px;
+           background: var(--warn-soft); color: var(--warn); border: 1px solid #fed7aa; }
+  .cal { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .cal th, .cal td { border: 1px solid var(--line); padding: 3px; height: 26px;
+                     font-size: 12px; text-align: center; }
+  .cal th:first-child, .cal td:first-child { width: 44px; color: var(--muted); }
+  .cal td.busy { font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  @media print {
+    #drop, .bar, .prefs, #go, #search, .chips, #warnings { display: none !important; }
+    .sched { border-color: #999; }
+  }
 </style>
 </head>
 <body>
@@ -90,6 +118,34 @@
       <input id="search" type="search" placeholder="Ders kodu, ad veya öğretim üyesi ara…">
       <div id="chips" class="chips"></div>
     </div>
+
+    <div class="card">
+      <strong>Tercihler</strong>
+      <div class="prefs">
+        <div>
+          <label>Boş kalsın istediğin günler</label>
+          <div id="freedays" class="days"></div>
+          <label>Boş gün önemi <output id="fdwOut">200</output></label>
+          <input id="fdw" type="range" min="0" max="500" step="25" value="200">
+        </div>
+        <div>
+          <label>Sıkışık ↔ aralıklı <output id="cmpOut">0.5</output></label>
+          <input id="cmp" type="range" min="-1" max="1" step="0.1" value="0.5">
+          <label>En fazla boşluk (saat, boş = sınırsız)</label>
+          <input id="maxgap" type="number" min="0" max="12" placeholder="sınırsız">
+        </div>
+        <div>
+          <label><input id="single" type="checkbox" checked>
+            Tek derslik günlerden kaçın</label>
+          <label><input id="overlap" type="checkbox">
+            Madde 18/2: en fazla 2 ders 1'er saat çakışabilsin</label>
+        </div>
+      </div>
+      <button id="go" class="primary">En iyi 10 programı hesapla</button>
+      <span id="status" class="sub"></span>
+    </div>
+
+    <div id="results"></div>
   </div>
 </main>
 <div id="tip" role="tooltip"></div>

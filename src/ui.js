@@ -31,6 +31,12 @@
       renderWarnings();
       renderChips();
       renderSummary();
+      renderFreeDays();
+      $('fdw').value = state.prefs.freeDayWeight;
+      $('fdwOut').textContent = state.prefs.freeDayWeight;
+      $('cmp').value = state.prefs.compactness;
+      $('cmpOut').textContent = state.prefs.compactness;
+      $('single').checked = state.prefs.avoidSingleCourseDays;
     } catch (err) {
       showError(err.message || String(err));
     }
@@ -181,6 +187,129 @@
     $('search').addEventListener('input', renderChips);
     $('gno').addEventListener('change', renderSummary);
     wireTooltip();
+    $('fdw').addEventListener('input', () => { $('fdwOut').textContent = $('fdw').value; });
+    $('cmp').addEventListener('input', () => { $('cmpOut').textContent = $('cmp').value; });
+    $('go').addEventListener('click', run);
+  }
+
+  function renderFreeDays() {
+    const box = $('freedays');
+    box.innerHTML = '';
+    for (const day of CourseParser.DAYS.slice(0, 6)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = day;
+      button.className = state.prefs.freeDays.includes(day) ? 'on' : '';
+      button.addEventListener('click', () => {
+        const at = state.prefs.freeDays.indexOf(day);
+        if (at >= 0) state.prefs.freeDays.splice(at, 1);
+        else state.prefs.freeDays.push(day);
+        button.classList.toggle('on');
+        persist();
+      });
+      box.appendChild(button);
+    }
+  }
+
+  function readPrefs() {
+    state.prefs.freeDayWeight = Number($('fdw').value);
+    state.prefs.compactness = Number($('cmp').value);
+    const gap = $('maxgap').value;
+    state.prefs.maxGap = gap === '' ? null : Number(gap);
+    state.prefs.avoidSingleCourseDays = $('single').checked;
+    persist();
+    return state.prefs;
+  }
+
+  const PALETTE = ['#dbeafe', '#dcfce7', '#fef3c7', '#fae8ff', '#ffe4e6',
+                   '#e0e7ff', '#ccfbf1', '#ffedd5'];
+  function colourFor(base) {
+    let hash = 0;
+    for (let i = 0; i < base.length; i++) hash = (hash * 31 + base.charCodeAt(i)) >>> 0;
+    return PALETTE[hash % PALETTE.length];
+  }
+
+  function calendarFor(entry) {
+    const used = new Set();
+    for (const section of entry.sections) {
+      for (const slot of section.slots) used.add(slot.day);
+    }
+    const days = CourseParser.DAYS
+      .map((code, index) => ({ code, index }))
+      .filter((d) => d.index < 5 || used.has(d.index));
+
+    const grid = new Map();
+    for (const section of entry.sections) {
+      for (const slot of section.slots) grid.set(slot.day + ':' + slot.hour, section);
+    }
+
+    let html = '<div class="scroll"><table class="cal"><thead><tr><th></th>';
+    for (const day of days) html += '<th>' + day.code + '</th>';
+    html += '</tr></thead><tbody>';
+    for (let hour = 1; hour <= CourseParser.MAX_HOUR; hour++) {
+      html += '<tr><th>' + hour + '</th>';
+      for (const day of days) {
+        const section = grid.get(day.index + ':' + hour);
+        html += section
+          ? '<td class="busy" style="background:' + colourFor(section.base) + '">' +
+            section.code + '</td>'
+          : '<td></td>';
+      }
+      html += '</tr>';
+    }
+    return html + '</tbody></table></div>';
+  }
+
+  function renderResults(output) {
+    const box = $('results');
+    box.innerHTML = '';
+
+    if (output.results.length === 0) {
+      box.innerHTML = '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
+        'Madde 18/2 seçeneğini açmayı ya da bir dersi çıkarmayı deneyebilirsin.</div>';
+      return;
+    }
+    if (output.truncated) {
+      box.innerHTML = '<div class="card warn">Arama sınıra takıldı — sonuçlar eksik olabilir. ' +
+        'Daha az ders seçersen tam sonuç alırsın.</div>';
+    }
+
+    output.results.forEach((entry, index) => {
+      const card = document.createElement('div');
+      card.className = 'sched';
+      const breakdown = entry.breakdown
+        .map((item) => item.label + ' ' + (item.points > 0 ? '+' : '') + item.points)
+        .join(' · ') || 'nötr';
+      const badge = entry.overlapHours > 0
+        ? '<span class="badge">' + entry.overlapHours +
+          ' saat çakışma — danışman onayı gerekir</span>'
+        : '';
+      const alternates = entry.alternates.length
+        ? '<p class="sub">Aynı saatlerde alternatif şubeler: ' +
+          entry.alternates.map((codes) => codes.join(', ')).join(' | ') + '</p>'
+        : '';
+      card.innerHTML = '<header><h3>#' + (index + 1) + '</h3>' +
+        '<span class="sub">puan ' + entry.score + '/100</span>' + badge + '</header>' +
+        calendarFor(entry) +
+        '<p class="sub">' + breakdown + '</p>' + alternates;
+      box.appendChild(card);
+    });
+  }
+
+  function run() {
+    const chosen = state.courses.filter((c) => state.selected.has(c.base));
+    if (chosen.length === 0) { $('status').textContent = 'Önce ders seç.'; return; }
+    $('status').textContent = 'Hesaplanıyor…';
+    // Yield once so the status text paints before the solver blocks the thread.
+    setTimeout(() => {
+      const started = Date.now();
+      const output = Solver.solve(chosen, readPrefs(), {
+        limit: 10, allowOverlap: $('overlap').checked,
+      });
+      $('status').textContent = output.considered + ' kombinasyon tarandı · ' +
+        (Date.now() - started) + ' ms';
+      renderResults(output);
+    }, 0);
   }
 
   wire();

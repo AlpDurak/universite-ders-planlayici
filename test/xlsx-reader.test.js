@@ -10,8 +10,11 @@ const bytes = () => new Uint8Array(fs.readFileSync(FIXTURE));
 
 test('unzip returns every entry in the container', async () => {
   const files = await R.unzip(bytes());
-  assert.ok(files['xl/worksheets/sheet1.xml'], 'sheet1 missing');
-  assert.ok(files['[Content_Types].xml'], 'stored entry missing');
+  assert.ok(files['xl/worksheets/sheet1.xml'], 'deflate entry (sheet1.xml) missing');
+  assert.ok(files['_rels/.rels'], 'stored entry (_rels/.rels) missing');
+  const relsDecode = new TextDecoder().decode(files['_rels/.rels']);
+  assert.ok(relsDecode.includes('<Relationship'), 'stored entry does not contain <Relationship tag');
+  assert.ok(relsDecode.includes('officeDocument'), 'stored entry does not contain officeDocument reference');
 });
 
 test('readWorkbook parses all rows with Turkish text intact', async () => {

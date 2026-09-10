@@ -418,6 +418,52 @@
     return html + '</tbody></table></div>';
   }
 
+  // A course code shown in its calendar colour, so the culprit named here is
+  // the same colour the user has been looking at in the timetables.
+  function codeTag(base) {
+    return '<span class="tag" style="background:' + colourFor(base) + '">' +
+      escapeHtml(base) + '</span>';
+  }
+
+  // Turn a failed search into an explanation. Naming the pair that clashes and
+  // the hours it clashes on is the difference between "it did not work" and
+  // "drop this one course".
+  function renderDiagnosis(diagnosis) {
+    if (!diagnosis) {
+      return '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı.</div>';
+    }
+
+    let html = '<div class="card err"><strong>Çakışmayan hiçbir kombinasyon bulunamadı.</strong>';
+
+    if (diagnosis.blockingPairs.length > 0) {
+      html += '<p>Şu dersler birbiriyle çakıştığı için birlikte alınamaz:</p><ul>';
+      for (const pair of diagnosis.blockingPairs) {
+        html += '<li>' + codeTag(pair.bases[0]) + ' ile ' + codeTag(pair.bases[1]) +
+          ' — ortak saatler: <strong>' + pair.cells.map(escapeHtml).join(', ') + '</strong></li>';
+      }
+      html += '</ul>';
+    } else if (diagnosis.higherOrder) {
+      html += '<p>Derslerin hiçbir ikilisi tek başına çakışmıyor, ama hepsi bir arada ' +
+        'haftaya sığmıyor. Bu yüzden tek bir suçlu ders yok — birini çıkarman gerekiyor.</p>';
+    }
+
+    if (diagnosis.dropCandidates.length > 0) {
+      html += '<p>Şu derslerden birini çıkarırsan geri kalanlar için program bulunur: ' +
+        diagnosis.dropCandidates.map(codeTag).join(' ') + '</p>';
+    } else if (!diagnosis.truncated && diagnosis.blockingPairs.length > 0) {
+      html += '<p>Tek bir dersi çıkarmak yetmiyor; en az iki ders değiştirmen gerekiyor.</p>';
+    }
+
+    if (diagnosis.truncated) {
+      html += '<p>Arama sınıra takıldığı için bu inceleme eksik olabilir. ' +
+        'Daha az ders seçersen daha kesin bir sonuç alırsın.</p>';
+    }
+
+    html += '<p class="sub">Madde 18/2 seçeneğini açmak da yardımcı olabilir: ' +
+      'en fazla iki dersin birer saati çakışabilir (danışman onayı gerekir).</p>';
+    return html + '</div>';
+  }
+
   function renderResults(output, chosen) {
     const box = $('results');
     box.innerHTML = '';
@@ -449,8 +495,7 @@
         ? '<div class="card err">Seçtiğin derslerin hiçbirinin ders saati okunamadı, ' +
           'bu yüzden program üretilemedi. Bu bir çakışma sorunu değil: dosyadaki saat ' +
           'bilgileri eksik. Ders saatlerini içeren tam bir dosya yüklemeyi deneyebilirsin.</div>'
-        : '<div class="card err">Çakışmayan hiçbir kombinasyon bulunamadı. ' +
-          'Madde 18/2 seçeneğini açmayı ya da bir dersi çıkarmayı deneyebilirsin.</div>';
+        : renderDiagnosis(output.diagnosis);
       return;
     }
 
@@ -485,9 +530,14 @@
     // Yield once so the status text paints before the solver blocks the thread.
     setTimeout(() => {
       const started = Date.now();
-      const output = Solver.solve(chosen, readPrefs(), {
-        limit: 10, allowOverlap: $('overlap').checked,
-      });
+      const prefs = readPrefs();
+      const allowOverlap = $('overlap').checked;
+      const output = Solver.solve(chosen, prefs, { limit: 10, allowOverlap: allowOverlap });
+      // "No combination found" says only that the search failed. When it does,
+      // work out WHICH courses are responsible so the user knows what to change.
+      if (output.results.length === 0) {
+        output.diagnosis = Solver.diagnose(chosen, prefs, { allowOverlap: allowOverlap });
+      }
       $('status').textContent = output.considered + ' kombinasyon tarandı · ' +
         (Date.now() - started) + ' ms';
       renderResults(output, chosen);

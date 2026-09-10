@@ -265,3 +265,92 @@ test('end to end: a genuinely impossible course set returns no schedules', async
   assert.strictEqual(
     Solver.solve(picked, S.DEFAULT_PREFS, { allowOverlap: true }).results.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// diagnose(): explain WHY a selection has no conflict-free arrangement.
+// ---------------------------------------------------------------------------
+
+test('diagnose names a pair that can never co-exist', () => {
+  // A and B both meet Monday hour 1 in their only sections.
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 1]])] });
+  const report = Solver.diagnose([a, b], prefs(), {});
+  assert.strictEqual(report.blockingPairs.length, 1);
+  assert.deepStrictEqual(report.blockingPairs[0].bases.slice().sort(), ['A', 'B']);
+  assert.deepStrictEqual(report.blockingPairs[0].cells, ['M1']);
+});
+
+test('diagnose does not flag a pair that can co-exist', () => {
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 2]])] });
+  const report = Solver.diagnose([a, b], prefs(), {});
+  assert.strictEqual(report.blockingPairs.length, 0);
+});
+
+test('diagnose reports every clashing cell of a blocking pair', () => {
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[3, 2], [3, 3]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[3, 1], [3, 2], [3, 3]])] });
+  const report = Solver.diagnose([a, b], prefs(), {});
+  assert.deepStrictEqual(report.blockingPairs[0].cells, ['Th2', 'Th3']);
+});
+
+test('diagnose names the course whose removal makes the rest fit', () => {
+  // A blocks both B and C; B and C are fine together.
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1], [0, 2]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 1]])] });
+  const c = course('C', { LEC: [sec('C.1', 'C', 'LEC', [[0, 2]])] });
+  const report = Solver.diagnose([a, b, c], prefs(), {});
+  assert.deepStrictEqual(report.dropCandidates, ['A']);
+});
+
+test('diagnose reports a higher-order clash when no single pair is blocking', () => {
+  // Any two of these three fit; all three cannot, because only two distinct
+  // hours exist between them.
+  const opts = (n) => [sec(n + '.1', n, 'LEC', [[0, 1]]), sec(n + '.2', n, 'LEC', [[0, 2]])];
+  const courses = ['A', 'B', 'C'].map((n) => course(n, { LEC: opts(n) }));
+  const report = Solver.diagnose(courses, prefs(), {});
+  assert.strictEqual(report.blockingPairs.length, 0, 'no pair alone is impossible');
+  assert.strictEqual(report.higherOrder, true);
+});
+
+test('diagnose reports nothing to explain when the selection already fits', () => {
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 2]])] });
+  const report = Solver.diagnose([a, b], prefs(), {});
+  assert.strictEqual(report.solvable, true);
+  assert.strictEqual(report.higherOrder, false);
+  assert.deepStrictEqual(report.dropCandidates, []);
+});
+
+test('diagnose skips the drop analysis when the search was truncated', () => {
+  const many = [];
+  for (let i = 0; i < 12; i++) {
+    const options = [];
+    for (let j = 1; j <= 6; j++) options.push(sec('C' + i + '.' + j, 'C' + i, 'LEC', [[i % 5, j]]));
+    many.push(course('C' + i, { LEC: options }));
+  }
+  const report = Solver.diagnose(many, prefs(), { nodeCap: 400 });
+  assert.strictEqual(report.truncated, true);
+  assert.deepStrictEqual(report.dropCandidates, []);
+});
+
+test('diagnose ignores courses with no usable sections', () => {
+  const bad = sec('B.1', 'B', 'LEC', [[0, 1]]);
+  bad.truncated = true;
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] });
+  const b = course('B', { LEC: [bad] });
+  const report = Solver.diagnose([a, b], prefs(), {});
+  assert.strictEqual(report.blockingPairs.length, 0, 'an unreadable course is not a clash');
+  assert.deepStrictEqual(report.skipped, ['B']);
+});
+
+test('diagnose honours the Madde 18 overlap allowance', () => {
+  // A and B clash on exactly one hour: forbidden strictly, permitted under
+  // the one-hour allowance. The diagnosis must agree with the mode in use.
+  const a = course('A', { LEC: [sec('A.1', 'A', 'LEC', [[0, 1]])] });
+  const b = course('B', { LEC: [sec('B.1', 'B', 'LEC', [[0, 1]])] });
+  assert.strictEqual(Solver.diagnose([a, b], prefs(), {}).blockingPairs.length, 1);
+  const relaxed = Solver.diagnose([a, b], prefs(), { allowOverlap: true });
+  assert.strictEqual(relaxed.solvable, true, 'one hour is allowed under Madde 18/2');
+  assert.strictEqual(relaxed.blockingPairs.length, 0);
+});

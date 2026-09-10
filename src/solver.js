@@ -226,5 +226,90 @@
     return { results: top, truncated, explored, considered, skipped, retained };
   }
 
-  return { solve, MAX_OVERLAP_PAIRS, MAX_HOURS_PER_PAIR };
+  // A search wide enough to answer "is this satisfiable at all" without letting
+  // the diagnosis itself become the slow part.
+  const DIAGNOSE_NODE_CAP = 200000;
+
+  const cellLabel = (slot) => DAYS[slot.day] + slot.hour;
+
+  // Every hour where some section of `a` lands on some section of `b`. For a
+  // pair that cannot co-exist, this is the set of hours the clash is made of.
+  function clashingCells(a, b) {
+    const groupsOf = (course) => ['LEC', 'LAB', 'PS']
+      .map((kind) => course.groups[kind])
+      .filter((options) => options.length > 0);
+    const cells = new Map();
+    for (const groupA of groupsOf(a)) {
+      for (const sectionA of groupA) {
+        for (const groupB of groupsOf(b)) {
+          for (const sectionB of groupB) {
+            for (const slotA of sectionA.slots) {
+              for (const slotB of sectionB.slots) {
+                if (slotA.day === slotB.day && slotA.hour === slotB.hour) {
+                  cells.set(slotA.day * 100 + slotA.hour, cellLabel(slotA));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return [...cells.entries()].sort((x, y) => x[0] - y[0]).map((entry) => entry[1]);
+  }
+
+  // Why does this selection have no conflict-free arrangement? "No combination
+  // found" names the symptom; this names the courses responsible.
+  function diagnose(courses, prefs, options) {
+    const opts = Object.assign({ nodeCap: DIAGNOSE_NODE_CAP, allowOverlap: false },
+      options || {});
+    // Every probe runs in the same mode as the search being explained, or the
+    // diagnosis would blame a pair the user's own settings actually permit.
+    const probe = { limit: 1, nodeCap: opts.nodeCap, allowOverlap: opts.allowOverlap };
+
+    const full = solve(courses, prefs, probe);
+    const skipped = full.skipped;
+    const usable = courses.filter((course) => !skipped.includes(course.base));
+
+    const report = {
+      solvable: full.results.length > 0,
+      truncated: full.truncated,
+      skipped,
+      blockingPairs: [],
+      dropCandidates: [],
+      higherOrder: false,
+    };
+    if (report.solvable) return report;
+
+    // Two courses that cannot co-exist on their own can never co-exist inside a
+    // larger selection either, so this is the sharpest thing we can say.
+    for (let i = 0; i < usable.length; i++) {
+      for (let j = i + 1; j < usable.length; j++) {
+        if (solve([usable[i], usable[j]], prefs, probe).results.length === 0) {
+          report.blockingPairs.push({
+            bases: [usable[i].base, usable[j].base],
+            cells: clashingCells(usable[i], usable[j]),
+          });
+        }
+      }
+    }
+
+    // Which single course, removed, would let the rest fit? Skipped when the
+    // first search already hit the cap: this costs one full search per course,
+    // and compounding an already-slow case would freeze the page.
+    if (!report.truncated && usable.length > 2) {
+      for (let i = 0; i < usable.length; i++) {
+        const rest = usable.filter((_, index) => index !== i);
+        if (solve(rest, prefs, probe).results.length > 0) {
+          report.dropCandidates.push(usable[i].base);
+        }
+      }
+    }
+
+    // No pair is impossible on its own, yet together they do not fit: the clash
+    // only exists in combination, so no single pair can be blamed for it.
+    report.higherOrder = report.blockingPairs.length === 0 && !report.truncated;
+    return report;
+  }
+
+  return { solve, diagnose, MAX_OVERLAP_PAIRS, MAX_HOURS_PER_PAIR };
 });
